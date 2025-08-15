@@ -26,7 +26,7 @@ t = model.tokenizer.apply_chat_template(
 )
 
 results =chain.run(
-    input_data=[{"prompt": t}],
+    prompts=[t],
     steps=8,
 )
 

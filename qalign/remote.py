@@ -18,7 +18,7 @@ def unflatten_list(flat_data, counts):
     return unflattened_translations
 
 
-DEFAULT_TEMPLATE = PromptTemplate.from_template("{prompt}")
+
 
 ## get env variable DEBUG
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
@@ -28,7 +28,7 @@ class RemoteVLLM:
         self,
         server_url: str,
         model_path: str,
-        prompt_template: PromptTemplate = DEFAULT_TEMPLATE,
+       
         max_new_tokens: int = 600,
         max_prompt_length: int = 300,
         stop_tokens: list = None,
@@ -40,7 +40,7 @@ class RemoteVLLM:
         
         self.server_url = server_url.rstrip("/")
        
-        self.prompt_template = prompt_template
+        
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
         self.max_prompt_length = max_prompt_length
@@ -69,17 +69,10 @@ class RemoteVLLM:
             self.tokenizer.pad_token_id = self.tokenizer.bos_token_id
             self.tokenizer.pad_token = self.tokenizer.bos_token
         
-    def get_prompt(self, **input_data):
-        input_data = {
-            k: v
-            for k, v in input_data.items()
-            if k in self.prompt_template.input_variables
-        }
-        prompt = self.prompt_template.format(**input_data)
-        return prompt
 
-    def encode(self, prompt_data):
-        prompt_txt = [self.get_prompt(**data) for data in prompt_data]
+
+    def encode(self, prompt_txt):
+
         tokens = self.tokenize(prompt_txt)
         return tokens
 
@@ -215,8 +208,7 @@ class RemoteVLLM:
         n: int = 1,
     ):
         prompts = []
-        for data in input_data:
-            prompt = self.get_prompt(**data)
+        for prompt in input_data: 
             prompts.extend([prompt] * n)
 
         payload = [

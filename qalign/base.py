@@ -560,7 +560,7 @@ class QAlign:
     
     def run(
         self,
-        input_data: List[Dict[str, str]],
+        prompts: List[ str],
         steps: int = 100,
         warm_start: Union[None, List[str]] = None,
         use_tqdm: bool = False,
@@ -587,13 +587,11 @@ class QAlign:
 
         self.steps = steps
         # Draw the initial state
-        self.prompt = self.get_prompt(input_data)
-
-        context = [self.model.get_prompt(**data) for data in input_data]
-        self.rm.set_context(context)
+        prompt_ids = self.get_prompt(prompts)
+        self.rm.set_context(prompts)
                 
         state = self.start_chain(
-            self.prompt,
+            prompt_ids,
             warm_start=warm_start,
         )
 
@@ -615,11 +613,10 @@ class QAlign:
 
         # Run the chain for the specified number of steps
         for i in iter:
-            prompt = self.prompt
 
             proposal_state, A = self.draw_transition(
                 previous_state=state,
-                prompt=prompt,
+                prompt=prompt_ids,
             )
 
            
@@ -648,8 +645,8 @@ class QAlign:
 
          
         
-        outputs=process_batch_outputs(self.state_path, len(self.prompt))
-        dupped_outputs= [ {"input":ind, "outputs": repeat_on_reject(output)} for ind,output in zip(input_data,outputs)]
+        outputs=process_batch_outputs(self.state_path, len(prompts))
+        dupped_outputs= [ {"input":ind, "outputs": repeat_on_reject(output)} for ind,output in zip(prompts,outputs)]
         return QAlign.Output(
             state_path=self.state_path,
             texts=dupped_outputs
