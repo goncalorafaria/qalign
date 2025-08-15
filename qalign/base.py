@@ -13,8 +13,9 @@ import math
 import queue
 import threading
 from copy import deepcopy
+import os
 
-
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 def join_accepted_values(accept, proposal, state):
     return [p if a else s for a, p, s in zip(accept, proposal, state)]
@@ -247,8 +248,7 @@ class QAlign:
         completions_text = [s["completion"] for s in samples]  # list of samples.
         completions_reward = [s["reward"] for s in samples]
 
-        completions_w_bos = self.model.tokenize(completions_text)
-        completions = [ids[1:] for ids in completions_w_bos]
+        completions = self.model.tokenize(completions_text)
 
         # Create the initial state for the Markov chain
         state = QAlign.State(
@@ -335,8 +335,8 @@ class QAlign:
             )
             for completion in completions
         ]
-        
-        print("idx:",indeces)
+        if DEBUG:
+            print("idx:",indeces)
 
         prefix = [
             completion[:index]
@@ -628,8 +628,9 @@ class QAlign:
                 bernoulli(A).rvs(),
             ).reshape(A.shape)
             
-            print("accept:",accept)
-            print("--"*20)
+            if DEBUG:
+                print("accept:",accept)
+                print("--"*20)
 
             state = self.join_accepted_values(
                 accept=accept,

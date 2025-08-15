@@ -1,8 +1,10 @@
 from langchain.prompts import PromptTemplate
 from transformers import AutoTokenizer
 import requests
+import aiohttp
+import asyncio
 import time
- 
+import os
  
 def unflatten_list(flat_data, counts):
 
@@ -18,11 +20,14 @@ def unflatten_list(flat_data, counts):
 
 DEFAULT_TEMPLATE = PromptTemplate.from_template("{prompt}")
 
+## get env variable DEBUG
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 class RemoteVLLM:
     def __init__(
         self,
         server_url: str,
+        model_path: str,
         prompt_template: PromptTemplate = DEFAULT_TEMPLATE,
         max_new_tokens: int = 600,
         max_prompt_length: int = 300,
@@ -45,8 +50,8 @@ class RemoteVLLM:
         self.max_retries = max_retries
 
         self._check_health()
-        self.model_path =self.check_model_name()
-        self.skip_special_tokens=skip_special_tokens
+        self.model_path = model_path
+        self.skip_special_tokens = skip_special_tokens
         
 
 
@@ -63,22 +68,6 @@ class RemoteVLLM:
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.bos_token_id
             self.tokenizer.pad_token = self.tokenizer.bos_token
-
-        
-    def check_model_name(self):
-        results = self._get("/v1/models")
-        
-        models={
-            'gemma3:1b': 'google/gemma-3-1b-it',
-            "qwen3:8b": "Qwen/Qwen3-8B",
-        }
-    
-        self.model_in_use = [ x["id"] for x in results["data"] if x["id"] in models][0]
-        
-        return  models[self.model_in_use]
-        
-        
-   
         
     def get_prompt(self, **input_data):
         input_data = {
@@ -128,29 +117,41 @@ class RemoteVLLM:
             raise ConnectionError(f"Server health check failed: {str(e)}")
 
     def _post_with_retries(self, endpoint, payload):
-        results = []
-        
-        for p in payload:
+        """Synchronous wrapper for async POST requests with retries."""
+        return asyncio.run(self._post_with_retries_async(endpoint, payload))
+    
+    async def _post_with_retries_async(self, endpoint, payload):
+        async def _make_request_with_retries(p):
             for attempt in range(self.max_retries):
                 try:
-                    resp = requests.post(
-                        f"{self.server_url}{endpoint}",
-                        json=p,
-                        timeout=self.timeout,
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        data = [data]
-                    results.extend(data)
-                    break
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            f"{self.server_url}{endpoint}",
+                            json=p,
+                            timeout=aiohttp.ClientTimeout(total=self.timeout),
+                        ) as resp:
+                            resp.raise_for_status()
+                            data = await resp.json()
+                            if isinstance(data, dict):
+                                data = [data]
+                            return data
                 except Exception as e:
                     if attempt == self.max_retries - 1:
                         raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
-                    time.sleep(1)
-        return results
+                    await asyncio.sleep(1)
+        
+        # Create tasks for all requests and run them concurrently
+        tasks = [_make_request_with_retries(p) for p in payload]
+        results = await asyncio.gather(*tasks)
+        
+        # Flatten results
+        flattened_results = []
+        for result in results:
+            flattened_results.extend(result)
+        
+        return flattened_results
 
-    def _get(self,endpoint):
+    def _get(self, endpoint):
         request = requests.get(f"{self.server_url}{endpoint}", timeout=self.timeout)
         request.raise_for_status()
         return request.json()
@@ -181,7 +182,7 @@ class RemoteVLLM:
 
         payload = [
             {
-                "model": self.model_in_use,#self.model_path,
+                "model": self.model_path,
                 "prompt": p,
                 "temperature": self.temperature,
                 "logprobs": 1,
@@ -199,12 +200,12 @@ class RemoteVLLM:
             for choice in result.get("choices", [])
         ]
 
-        
-        print("prompt:",repr(prompt_text))
-        print("completion:",repr(results[0]["choices"][0]["text"]))
+        if DEBUG:
+            print("prompt:",repr(prompt_text[0]))
+            print("completion:",repr(results[0]["choices"][0]["text"]))
   
 
-        completion_ids = [xi[1:] for xi in self.tokenize(completions)]
+        completion_ids = [xi for xi in self.tokenize(completions)]
 
         return completion_ids 
 
@@ -220,7 +221,7 @@ class RemoteVLLM:
 
         payload = [
             {
-                "model": self.model_in_use,#self.model_path,
+                "model": self.model_path,
                 "prompt": p,
                 "max_tokens": self.max_new_tokens,
                 "temperature": self.temperature, 
