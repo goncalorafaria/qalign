@@ -329,12 +329,11 @@ class QAlign:
         proposal_state = self.transition(previous_state, prompt)
         
         
-        proposal_reward = self.compute_reward(
+        proposal_state.reward = self.compute_reward(
             [p + c for p, c in zip(self.prompts,proposal_state.text)],
         )
         
 
-        proposal_state.reward = proposal_reward
 
         return proposal_state
 
@@ -449,38 +448,6 @@ class QAlign:
 
         return alpha
 
-    def draw_transition(
-        self,
-        previous_state: State,
-        prompt,
-    ) -> Tuple[State, np.ndarray]:
-        """
-        This function performs one step of the Metropolis-Hastings MCMC algorithm.
-        It generates a proposal state and calculates the detailed balance to decide whether to accept or reject the proposal.
-
-        Parameters:
-        previous_state (State): The previous state of the Markov Chain.
-
-        Returns:
-        tuple: A tuple containing the proposal state and the acceptance probabilities.
-        """
-       
-
-        proposal_state = self.transition_and_evaluation(
-            previous_state=previous_state,
-            prompt=prompt,
-        )
-        
-
-        alpha = self.criterion(
-            previous_state,
-            proposal_state,
-            prompt=prompt,
-        )
-        return (
-            proposal_state,
-            alpha,
-        )
 
     def stack(
         self,
@@ -502,7 +469,7 @@ class QAlign:
     
     def run(
         self,
-        prompts: List[ str],
+        conversations: List[ List[Dict[str, str]] ],
         steps: int = 100,
         warm_start: Union[None, List[str]] = None,
         use_tqdm: bool = False,
@@ -524,6 +491,13 @@ class QAlign:
         Returns:
         - Output: A named tuple containing the state path.
         """
+        
+        prompts = self.model.tokenizer.apply_chat_template(
+            conversations,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        
         
         self.state_path = []
         
@@ -562,11 +536,18 @@ class QAlign:
         # Run the chain for the specified number of steps
         for i in iter:
 
-            proposal_state, A = self.draw_transition(
-                previous_state=state,
-                prompt=prompt_ids,
+            proposal_state = self.transition(state, prompt_ids)
+
+            
+            proposal_state.reward = self.compute_reward(
+                [ c + [{"role":"assistant", "content":t}] for c,t in zip(conversations,proposal_state.text)],
             )
 
+            A = self.criterion(
+                state,
+                proposal_state,
+                prompt=prompt_ids,
+            )
            
             # Decide whether to accept the proposal
             accept = np.array(

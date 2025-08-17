@@ -19,14 +19,10 @@ chain = QAlign(
     beta=1.0, 
 )
 
-t = model.tokenizer.apply_chat_template(
-    [{"role": "user", "content": "What district is Guimarães in?"}],
-    tokenize=False,
-    add_generation_prompt=True,
-)
+t = [{"role": "user", "content": "What district is Guimarães in?"}]
 
 results =chain.run(
-    prompts=[t],
+    conversations=[t],
     steps=8,
 )
 

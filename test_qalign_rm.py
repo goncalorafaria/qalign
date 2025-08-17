@@ -37,11 +37,7 @@ chain = QAlign(
 question = "Joana has 10 apples. She gives it to The Lord of Fire which multiplies them by 2 every 10 seconds. One in five of the apples are poisoned and will kill anyone who eats them. All of the apples will be eaten by a hungry crowd. How many people die after 50 seconds?"
 steps = 8
 
-t = model.tokenizer.apply_chat_template(
-    [{"role": "user", "content": question}],
-    tokenize=False,
-    add_generation_prompt=True,
-)
+t = [{"role": "user", "content": question}]
 
 callback = AsyncAnimateLLMResponsesCallback(
     prompt=question,
@@ -50,7 +46,7 @@ callback = AsyncAnimateLLMResponsesCallback(
 
 with callback:
     results =chain.run(
-        prompts=[t],
+        conversations=[t],
         steps=steps,
         callbacks=[callback],
     )

@@ -1,12 +1,26 @@
 from typing import List, Callable
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Dict
 import requests
 import aiohttp
 import asyncio
 from qalign.utils.list import chunked
 from itertools import islice
 import os
+from typing import List
+import gc
+
+#from quest.utils.logger import fix_loggers
+from qalign.utils.data import get_loader
+import numpy as np
+from trl import AutoModelForCausalLMWithValueHead
+
+#fix_loggers(name="transformers")
+
+import torch
+from typing import Dict
+from torch import nn
+
 
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 class Reward:
@@ -29,8 +43,7 @@ class Reward:
 
     def evaluate(
         self,
-        candidates: List[str],
-        accepted_indices: List[int],
+       conversations: List[List[Dict[str, str]]],
         **kwargs,
     ) -> List[float]:
         """
@@ -75,7 +88,7 @@ class ConstantReward(Reward):
 
     def evaluate(
         self,
-        candidates: List[str],
+        conversations: List[List[Dict[str, str]]],
         
         **kwargs,
     ) -> List[float]:
@@ -92,7 +105,7 @@ class ConstantReward(Reward):
         """
  
 
-        return [self.reward for _ in range(len(candidates))]
+        return [self.reward for _ in range(len(conversations))]
 
     def set_context(self, *args, **kwargs):
         pass
@@ -123,7 +136,7 @@ class BackwardReward(Reward):
 
     def evaluate(
         self,
-        candidates: List[str],
+        conversations: List[List[Dict[str, str]]],
         **kwargs,
     ) -> List[float]:
         """
@@ -138,7 +151,7 @@ class BackwardReward(Reward):
 
         """
 
-        return [-s for s in self.model.evaluate(candidates, **kwargs)]
+        return [-s for s in self.model.evaluate(conversations, **kwargs)]
 
 
 class RewardMix(Reward):
@@ -160,12 +173,12 @@ class RewardMix(Reward):
 
     def evaluate(
         self,
-        candidates: List[str],
+        conversations: List[List[Dict[str, str]]],
         **kwargs,
     ) -> List[float]:
 
         ## TODO THIS SHOULD BE DONE IN PARALLEL !!!!!!!
-        evaluations = [r.evaluate(candidates, **kwargs) for r in self.rewards]
+        evaluations = [r.evaluate(conversations, **kwargs) for r in self.rewards]
 
         return (
             np.stack(
@@ -194,12 +207,12 @@ class RewardStatic(Reward):
 
     def evaluate(
         self,
-        candidates: List[str],
+        conversations: List[List[Dict[str, str]]],
         **kwargs,
     ) -> List[float]:
 
         ## TODO THIS SHOULD BE DONE IN PARALLEL !!!!!!!
-        evaluations = self.reward_func(candidates, **kwargs)
+        evaluations = self.reward_func(conversations, **kwargs)
 
         return evaluations
 
@@ -329,7 +342,7 @@ class RemoteReward(Reward):
         rewards = [r for result in results for r in result["rewards"]]
         return rewards
 
-    def evaluate(self, candidates, use_tqdm=False, **kwargs):
+    def evaluate(self, conversations, use_tqdm=False, **kwargs):
         """
         Evaluate candidates using the reward model.
 
@@ -348,17 +361,16 @@ class RemoteReward(Reward):
 
         # Create payloads with texts and context
         payloads = [
-            {"texts": t, "context": ""} for t in candidates
+            {"input": t} for t in conversations
         ]
         
         if DEBUG:
-            print("<rm> texts:",repr(payloads[0]["texts"])) 
+            print("<rm> texts:",repr(payloads[0])) 
             
         # Pack payloads into batches
         packed_payload = [
             {
-                self.routes["arg"]: [p["texts"] for p in packed],
-                "context": [p["context"] for p in packed],
+                "input": [p["input"] for p in packed],
                 "model": self.model_path,
             }
             for packed in chunked(payloads, temp_batch)
@@ -368,3 +380,357 @@ class RemoteReward(Reward):
         results = self._evaluate(packed_payload)
 
         return results
+
+
+class RewardModel(Reward):
+
+    # applies the model only on outputs r(y)
+    """
+    RewardModel class represents a reward model based on a pre-trained Hugging Face model.
+
+    Args:
+        model_path (str): The path to the pre-trained model.
+        batch_size (int, optional): The batch size for inference. Defaults to 32.
+        device (str, optional): The device to use for inference. Defaults to 'cuda'.
+
+    Attributes:
+        model (AutoModelForSequenceClassification): The pre-trained model for sequence classification.
+        tokenizer (AutoTokenizer): The tokenizer for the model.
+        batch_size (int): The batch size for inference.
+        device (torch.device): The device to use for inference.
+
+    Methods:
+        evaluate(candidates: List[str]) -> List[float]:
+            Evaluates a list of candidate sequences and returns a list of reward values.
+
+    """
+
+    def __init__(
+        self,
+        model_path: str,
+        batch_size: int = 32,
+        device: int = 0,
+        task: str = "text-classification",
+        clamp: float = 40,
+        dtype=torch.bfloat16,
+        use_flash_attention: bool = True,
+        device_count=1,
+        max_length: int = 1024,
+    ):
+
+        super().__init__(f"rm:{model_path}")
+
+        self.batch_size = batch_size
+        self.device = device
+        """self.model = pipeline(
+            task,
+            model=model_path,
+            device=device,
+        )"""
+        self.kwargs = {"batch_size": self.batch_size}
+        self.clamp = clamp
+
+        from transformers import (
+            AutoTokenizer,
+            AutoModelForSequenceClassification,
+        )
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            padding_side="left",
+        )
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = (
+                self.tokenizer.bos_token_id
+            )  # THIS IS ACTUALLY REALLY IMPORTANT :) THIS HIDDEN NIGHTMARE DONT USE EOS. - w/ AR models in batch we may have padding in the beginig
+            self.tokenizer.pad_token = self.tokenizer.bos_token
+
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_path,
+            torch_dtype=dtype,
+            pad_token_id=self.tokenizer.pad_token_id,
+            use_flash_attention_2=use_flash_attention,
+            # device_map="auto",
+        )
+
+        if device_count > 1:
+
+            self.model = nn.DataParallel(
+                self.model, device_ids=(np.arange(device_count) + self.device).tolist()
+            )
+
+        self.device = torch.device(
+            f"cuda:{self.device}" if torch.cuda.is_available() else "cpu"
+        )
+
+        self.model.to(self.device)
+        self.model.eval()
+
+    def evaluate(
+        self,
+        candidates: List[str],
+        use_tqdm=False,
+        **kwargs,
+    ) -> List[float]:
+        """
+        Evaluates a list of candidate sequences and returns a list of reward values.
+
+        Args:
+            candidates (List[str]): The list of candidate sequences to evaluate.
+            accepted_indices (List[int]): The list of indices of accepted candidates.
+            batch_size (int, optional): The batch size for inference. Defaults to 32.
+
+        Returns:
+            List[float]: The list of reward values for each candidate sequence.
+
+        """
+
+        loader = get_loader(
+            candidates,
+            self.tokenizer,
+            use_tqdm=use_tqdm,
+            batch_size=self.batch_size,
+            max_length=self.max_length,
+        )
+
+        rewards = []
+
+        with torch.no_grad():
+            for batch in loader:
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                )
+
+                logits = np.clip(
+                    outputs.logits[:, 0].float().cpu().numpy(),
+                    -self.clamp,
+                    self.clamp,
+                ).tolist()
+
+                del outputs, input_ids, attention_mask
+                gc.collect()
+                torch.cuda.empty_cache()
+
+                rewards.extend(logits)
+
+        return rewards
+
+
+class ClassificationRewardModel(RewardModel):
+
+    # applies the model only on outputs r(y)
+    """
+    RewardModel class represents a reward model based on a pre-trained Hugging Face model.
+
+    Args:
+        model_path (str): The path to the pre-trained model.
+        batch_size (int, optional): The batch size for inference. Defaults to 32.
+        device (str, optional): The device to use for inference. Defaults to 'cuda'.
+
+    Attributes:
+        model (AutoModelForSequenceClassification): The pre-trained model for sequence classification.
+        tokenizer (AutoTokenizer): The tokenizer for the model.
+        batch_size (int): The batch size for inference.
+        device (torch.device): The device to use for inference.
+
+    Methods:
+        evaluate(candidates: List[str]) -> List[float]:
+            Evaluates a list of candidate sequences and returns a list of reward values.
+
+    """
+
+    def __init__(self, **rm_kwargs):
+        super().__init__(**rm_kwargs)
+        self.name = "c" + self.name
+
+    def evaluate(
+        self,
+        conversations: List[List[Dict[str, str]]],
+        **kwargs,
+    ) -> List[float]:
+        """
+        Evaluates a list of candidate sequences and returns a list of reward values.
+
+        Args:
+            candidates (List[str]): The list of candidate sequences to evaluate.
+
+        Returns:
+            List[float]: The list of reward values for each candidate sequence.
+
+        """
+        texts = [ self.tokenizer.apply_chat_template(
+            conv,
+            tokenize=False,
+            add_generation_prompt=False,
+        ) for conv in conversations]
+
+        return super().evaluate(texts, **kwargs)
+
+
+class ValueHead(Reward):
+
+    def __init__(
+        self,
+        model_path: str,
+        batch_size: int = 32,
+        device: int = 0,
+        task: str = "text-classification",
+        clamp: float = 40,
+        dtype=torch.bfloat16,
+        use_flash_attention: bool = True,
+        device_count=1,
+        max_length: int = 1024,
+    ):
+
+        super().__init__("vh:" + model_path)
+
+        self.batch_size = batch_size
+        self.device = device
+        self.max_length = max_length
+        self.kwargs = {"batch_size": self.batch_size}
+        self.clamp = clamp
+        self.max_length = max_length
+
+        from transformers import (
+            AutoTokenizer,
+        )
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            padding_side="left",
+        )
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = (
+                self.tokenizer.bos_token_id
+            )  # THIS IS ACTUALLY REALLY IMPORTANT :) THIS HIDDEN NIGHTMARE DONT USE EOS. - w/ AR models in batch we may have padding in the beginig
+            self.tokenizer.pad_token = self.tokenizer.bos_token
+
+        self.model = AutoModelForCausalLMWithValueHead.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            # pad_token_id=self.tokenizer.pad_token_id,
+            use_flash_attention_2=use_flash_attention,
+            # device_map="auto",
+        ).to(dtype)
+
+        vhead_params = torch.load(
+            model_path + "/value_head.bin", map_location="cpu", weights_only=True
+        )
+
+        self.model.v_head.summary.weight = torch.nn.Parameter(
+            vhead_params["v_head.summary.weight"]
+        )
+        self.model.v_head.summary.bias = torch.nn.Parameter(
+            vhead_params["v_head.summary.bias"]
+        )
+
+        print("Device COUNT:", device_count)
+        if device_count > 1:
+            # self.model = self.model.to(self.device)
+            self.model = nn.DataParallel(
+                self.model, device_ids=(np.arange(device_count) + self.device).tolist()
+            )
+
+        self.device = torch.device(
+            f"cuda:{self.device}" if torch.cuda.is_available() else "cpu"
+        )
+
+        self.model.to(device)
+        # self.model.to(self.device)
+        self.model.eval()
+
+    def _evaluate(
+        self,
+        texts: List[str],
+        use_tqdm=False,
+        **kwargs,
+    ) -> List[float]:
+        """
+        Evaluates a list of candidate sequences and returns a list of reward values.
+
+        Args:
+            candidates (List[str]): The list of candidate sequences to evaluate.
+            accepted_indices (List[int]): The list of indices of accepted candidates.
+            batch_size (int, optional): The batch size for inference. Defaults to 32.
+
+        Returns:
+            List[float]: The list of reward values for each candidate sequence.
+
+        """
+        
+
+        loader = get_loader(
+            texts,
+            self.tokenizer,
+            use_tqdm=use_tqdm,
+            batch_size=self.batch_size,
+            max_length=self.max_length,
+        )
+
+        rewards = []
+
+        with torch.no_grad():
+            for batch in loader:
+                # sj_text = self.tokenizer.decode(batch["input_ids"][0])
+                # si_text = self.tokenizer.decode(si)
+                # print(sj_text)
+                # print("-" * 100)
+                # print(candidates[0])
+
+                # (attention_mask[0] == 0).sum()
+                # self.tokenizer.decode(batch["input_ids"][0][875:])
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+
+                # print(input_ids.shape)
+
+                logits, _, values = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    # return_dict=True,
+                )
+
+                # outputs
+
+                values = values[:, -1]
+
+                logits = np.clip(
+                    values.flatten().float().cpu().numpy(),
+                    -self.clamp,
+                    self.clamp,
+                ).tolist()
+
+                rewards.extend(logits)
+
+        return rewards
+
+
+    def evaluate(
+        self,
+        conversations: List[List[Dict[str, str]]],
+        **kwargs,
+    ) -> List[float]:
+        """
+        Evaluates a list of candidate sequences and returns a list of reward values.
+
+        Args:
+            candidates (List[str]): The list of candidate sequences to evaluate.
+
+        Returns:
+            List[float]: The list of reward values for each candidate sequence.
+
+        """
+
+        texts = [ self.tokenizer.apply_chat_template(
+            conv,
+            tokenize=False,
+            add_generation_prompt=False,
+        ) for conv in conversations]
+
+        return self._evaluate(texts, **kwargs)

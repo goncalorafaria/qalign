@@ -171,7 +171,7 @@ class RemoteVLLM:
         results = self._post_with_retries("/v1/completions", payload)
 
         completions = [
-            choice["text"] + self.tokenizer.eos_token
+            choice["text"] 
             for result in results
             for choice in result.get("choices", [])
         ]
