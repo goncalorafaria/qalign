@@ -7,8 +7,25 @@ from typing import Optional
 import sympy
 from sympy.parsing.latex import parse_latex
 
-
+from numpy.random import randint
+import math
 ## from open instruct
+
+
+def sample_index(truncation: int) -> int:
+    """
+    Samples a random index from 0 to truncation (exclusive), optionally in blocks.
+    """
+    block_size: int = 1
+    return randint(0, truncation // block_size) * block_size
+
+def log_prob_index(index: int, truncation: int) -> float:
+    """
+    Returns the log probability of sampling an index under a uniform discretized distribution.
+    """
+    block_size: int = 1
+    normalization = float(truncation // block_size)
+    return -math.log(normalization)
 
 
 def generate_axis(limit, k):

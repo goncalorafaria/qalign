@@ -5,20 +5,7 @@ import aiohttp
 import asyncio
 import time
 import os
- 
-def unflatten_list(flat_data, counts):
-
-    unflattened_translations = []
-    start = 0
-    for count in counts:
-        end = start + count
-        unflattened_translations.append(flat_data[start:end])
-        start = end
-
-    return unflattened_translations
-
-
-
+from qalign.utils.list import unflatten_list
 
 ## get env variable DEBUG
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
@@ -29,13 +16,12 @@ class RemoteVLLM:
         server_url: str,
         model_path: str,
        
-        max_new_tokens: int = 600,
-        max_prompt_length: int = 300,
+        max_new_tokens: int = 1000,
+        max_prompt_length: int = 1000,
         stop_tokens: list = None,
         temperature: float = 1.0,
-        skip_special_tokens: bool = False,
         timeout: float = 300,
-        max_retries: int = 5,
+        max_retries: int = 20,
     ):
         
         self.server_url = server_url.rstrip("/")
@@ -44,14 +30,13 @@ class RemoteVLLM:
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
         self.max_prompt_length = max_prompt_length
-        
-        self.skip_special_tokens = skip_special_tokens
+         
         self.timeout = timeout
         self.max_retries = max_retries
 
+
+        self.model_path = model_path 
         self._check_health()
-        self.model_path = model_path
-        self.skip_special_tokens = skip_special_tokens
         
 
 
@@ -87,24 +72,22 @@ class RemoteVLLM:
             )
             for p in prompt
         ]
-
-    def effective_detokenize(self, ids):
-        prompt_text = self.decode_tokenize(
-            ids, skip_special_tokens=False, spaces_between_special_tokens=False
-        )
-        return prompt_text
     
-    def decode_tokenize(self, ids, **kwargs):
-        if "skip_special_tokens" not in kwargs:
-            kwargs["skip_special_tokens"] = self.skip_special_tokens
-        return self.tokenizer.batch_decode(ids, **kwargs)
+    def decode_tokenize(self, ids): 
+        return self.tokenizer.batch_decode(ids, skip_special_tokens=False, spaces_between_special_tokens=False)
 
     def _check_health(self):
         url = f"{self.server_url}/v1/models"
         try:
             resp = requests.get(url, timeout=self.timeout)
             resp.raise_for_status()
-            print(f"Server {self.server_url} is healthy and ready for requests.")
+            
+            ## check if self.model_path is in the response
+            if not len([1 for x in resp.json()["data"] if x["id"] == self.model_path ]):
+                raise ConnectionError(f"Model {self.model_path} not found in the response")
+            
+            if DEBUG:
+                print(f"Server[{self.model_path}]: {self.server_url} is healthy and ready for requests.")
             return True
         except Exception as e:
             raise ConnectionError(f"Server health check failed: {str(e)}")
@@ -159,7 +142,7 @@ class RemoteVLLM:
             for x in input_data:
                 nx = len(x)
                 if nx > self.max_prompt_length:
-                    ninput.append(x[nx - self.max_prompt_length :])
+                    ninput.append(x[:self.max_prompt_length])
                 else:
                     ninput.append(x)
             input_data = ninput
@@ -169,7 +152,7 @@ class RemoteVLLM:
         #)
         
          ## skip special tokens at False was causing major issues.
-        prompt_text = self.effective_detokenize(input_data)
+        prompt_text = self.decode_tokenize(input_data)
         
        
 
@@ -193,10 +176,6 @@ class RemoteVLLM:
             for choice in result.get("choices", [])
         ]
 
-        if DEBUG:
-            print("prompt:",repr(prompt_text[0]))
-            print("completion:",repr(results[0]["choices"][0]["text"]))
-  
 
         completion_ids = [xi for xi in self.tokenize(completions)]
 

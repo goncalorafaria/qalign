@@ -1,4 +1,4 @@
-from qalign.remote import RemoteVLLM
+from qalign.model import RemoteVLLM
 from qalign.reward import ConstantReward
 from qalign.base import QAlign
 # google/gemma-3-1b-it
@@ -29,5 +29,7 @@ results =chain.run(
     prompts=[t],
     steps=8,
 )
+
+
 
 #print(results)

@@ -8,20 +8,15 @@ import copy
 from expkit.exp import Exp
 from expkit.storage import DiskStorage
 
-## quest
-from quest.reward.model import ContextualRewardModel, ValueHead
-from quest.reward.remote import RemoteReward
-from quest.proposal import RLHFSuffixProposal
-from quest.core import Quest
-
 ## qalign
 from qalign.utils.data import FlexiblePromptTemplate
 from qalign.utils.data import get_data_iterable
-from quest.utils.list import chunked
+from qalign.utils.list import chunked
 
 
-## literegistry
-from literegistry import RegistryClient, FileSystemKVStore
+from qalign.reward import RemoteReward
+from qalign.model import RemoteVLLM
+from qalign.base import QAlign
 
 
 def create_experiment(
@@ -101,65 +96,6 @@ def create_extension_experiment(storage, experiment, new_steps=1024):
 
     return new_exp
 
-
-def create_vllm_model(
-    model_path: str,
-    temperature: float,
-    max_new_tokens: int = 100,
-    max_prompt_length: int = 600,
-    stop_tokens: Optional[List[str]] = None,
-    device_count: int = 1,
-    gpu_memory_utilization: float = 0.8,
-    # prompt_template: Optional[str] = None,
-    enforce_eager: bool = False,
-    remote: bool = False,
-):
-    """
-    Creates a standardized VLLM model instance with common configurations.
-    """
-    if stop_tokens is None:
-        stop_tokens = ["</s>"]
-
-    extra_args = {}
-    if "bnb" in model_path:
-        extra_args.update(
-            {
-                "trust_remote_code": True,
-                "quantization": "bitsandbytes",
-                "load_format": "bitsandbytes",
-            }
-        )
-
-    model_args = {
-        "model_path": model_path,
-        "download_dir": os.environ.get("HF_HOME", "/tmp/"),
-        "stop_tokens": stop_tokens,
-        "temperature": temperature,
-        "gpu_memory_utilization": gpu_memory_utilization,
-        "dtype": "bfloat16",
-        "max_new_tokens": max_new_tokens,
-        "max_prompt_length": max_prompt_length,
-        "tensor_parallel_size": device_count,
-        "enable_prefix_caching": True,
-        "enforce_eager": enforce_eager,
-        **extra_args,
-    }
-
-    if remote:
-        from quest.model.remote import RemoteVLLM
-
-        registry = RegistryClient(
-            store=FileSystemKVStore("/gscratch/ark/graf/registry"),
-            max_history=3600,
-            cache_ttl=60,
-            service_type="model_path",
-        )
-
-        return RemoteVLLM(registry=registry, **model_args)
-    else:
-        from quest.model.vllm import VLLM
-
-        return VLLM(**model_args)
 
 
 def process_batch_outputs(
@@ -267,67 +203,35 @@ def run_quest(
     model,
     steps,
     data_batches,
-    reward_model_batch_size=64,
-    reward_device=1,
-    reward_device_count=1,
-    remote=False,
+    reward_model_batch_size=16,
+    reward_url="http://localhost:8080",
 ):
 
-    reward_type = experiment.meta["reward_type"]
+    
 
-    if remote:
-        registry = RegistryClient(
-            store=FileSystemKVStore("/gscratch/ark/graf/registry"),
-            max_history=3600,
-            cache_ttl=60,
-            service_type="model_path",
-        )
-
-        reward = RemoteReward(
-            registry=registry,
-            model_path=experiment.meta["reward_model_path"],
-            reward_type=reward_type,
-            # batch_size=reward_model_batch_size,
-        )
-
-    else:
-        if reward_type == "contextual":
-            reward = ContextualRewardModel(
-                model_path=experiment.meta["reward_model_path"],
-                # batch_size=reward_model_batch_size,
-                device=reward_device,
-                device_count=reward_device_count,
-            )
-        elif reward_type == "value":
-            reward = ValueHead(
-                model_path=experiment.meta["reward_model_path"],
-                # batch_size=reward_model_batch_size,
-                device=reward_device,
-                device_count=reward_device_count,
-            )  # sentiment model.
-        else:
-            raise ValueError(f"Unknown reward type: {reward_type}")
-
+    reward = RemoteReward(
+        server_url=reward_url,
+        model_path=experiment.meta["reward_model_path"],
+        batch_size=reward_model_batch_size,
+    )
+    
     # Process each batch
     for data_batch in data_batches:
-        context = [model.get_prompt(**data) for data in data_batch]
-        reward.set_context(context)
-
-        chain = Quest(
-            input_data=data_batch,
-            proposal=RLHFSuffixProposal(
-                model=model,
-                reward=reward,
-            ),
+ 
+        chain = QAlign(
+            model=model,
+            reward=reward,
             beta=experiment.meta["beta"],
         )
 
-        chain_outputs = chain.run(
+        chain_outputs = chain.run_pipelined(
+            prompts=[data["prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
+            workers=4,
         )
 
-        outputs = process_batch_outputs(chain_outputs, len(data_batch))
+        outputs = chain_outputs.state_path
         experiment.add_instances(
             inputs=data_batch,
             outputs=outputs,
@@ -344,72 +248,39 @@ def run_quest_bootstrap(
     experiment,
     model,
     steps,
-    reward_device=1,
-    reward_device_count=1,
-    remote=False,
+    reward_model_batch_size=16,
+    reward_url="http://localhost:8080",
 ):
 
-    reward_type = experiment.meta["reward_type"]
 
-    if remote:
-        registry = RegistryClient(
-            store=FileSystemKVStore("/gscratch/ark/graf/registry"),
-            max_history=3600,
-            cache_ttl=60,
-            service_type="model_path",
-        )
-
-        reward = RemoteReward(
-            registry=registry,
-            model_path=experiment.meta["reward_model_path"],
-            reward_type=reward_type,
-            # batch_size=reward_model_batch_size,
-        )
-
-    else:
-        if reward_type == "contextual":
-            reward = ContextualRewardModel(
-                model_path=experiment.meta["reward_model_path"],
-                # batch_size=reward_model_batch_size,
-                device=reward_device,
-                device_count=reward_device_count,
-            )
-        elif reward_type == "value":
-            reward = ValueHead(
-                model_path=experiment.meta["reward_model_path"],
-                # batch_size=reward_model_batch_size,
-                device=reward_device,
-                device_count=reward_device_count,
-            )  # sentiment model.
-        else:
-            raise ValueError(f"Unknown reward type: {reward_type}")
-
+    reward = RemoteReward(
+        server_url=reward_url,
+        model_path=experiment.meta["reward_model_path"],
+        batch_size=reward_model_batch_size,
+    )
+    
     for data_batch in chunked(
         experiment.meta["bootstrap"], experiment.get("batch_size")
     ):
-        context = [data["input"]["prompt"] for data in data_batch]
 
-        reward.set_context(context)
-
-        chain = Quest(
-            input_data=[data["input"] for data in data_batch],
-            proposal=RLHFSuffixProposal(
-                model=model,
-                reward=reward,
-            ),
+        chain = QAlign(
+            model=model,
+            reward=reward,
             beta=experiment.meta["beta"],
         )
 
-        chain_outputs = chain.run(
+        chain_outputs = chain.run_pipelined(
+            prompts=[data["prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
             warm_start=[
                 {"completion": data["completion"], "reward": data["reward"]}
                 for data in data_batch
             ],
+            workers=4,
         )
 
-        outputs = process_batch_outputs(chain_outputs, len(data_batch))
+        outputs = chain_outputs.state_path
 
         experiment.add_instances(
             inputs=data_batch,
@@ -426,78 +297,17 @@ def run_quest_bootstrap(
 #  Create model
 def run_experiment(
     experiment,
-    gpu_memory_utilization=0.95,
-    device_count=1,
-    reward_model_batch_size=64,
-    reward_device=1,
-    reward_device_count=1,
-    remote=False,
+    model_url="http://localhost:8080",
+    reward_url="http://localhost:8080",
+    reward_model_batch_size=16,
 ):
 
     # Create model
-    model = create_vllm_model(
+    model =  RemoteVLLM(
+        server_url=model_url,
         model_path=experiment.meta["model_path"],
-        temperature=experiment.meta["temperature"],
-        max_new_tokens=experiment.meta["max_new_tokens"],
         max_prompt_length=experiment.meta["max_prompt_length"],
-        device_count=device_count,
-        gpu_memory_utilization=gpu_memory_utilization,
-        stop_tokens=experiment.meta["stop_tokens"],
-        remote=remote,
-    )
-
-    completed = len(experiment.instances())
-
-    # Get batched data with start index
-    data_batches = get_batched_data(
-        model=model,
-        dataset_path=experiment.meta["dataset"],
-        split=experiment.meta["split"],
-        n=experiment.meta["n"],
-        batch_size=experiment.meta.get("batch_size", 64),
-        prompt_template=experiment.meta["prompt_template"],
-        start_index=experiment.meta.get("i", 0),
-        num_chains=experiment.meta.get("num_chains", 1),
-        completed=completed,
-        format=experiment.meta.get("format", "chat"),
-        use_few_shot=experiment.meta.get("use_few_shot", False),
-    )
-
-    if experiment.meta["variant"] == "ancestral":
-        run_ancestral(
-            experiment=experiment,
-            model=model,
-            steps=experiment.meta["steps"],
-            data_batches=data_batches,
-        )
-    elif experiment.meta["variant"] == "quest-rlhf":
-        run_quest(
-            experiment=experiment,
-            model=model,
-            steps=experiment.meta["steps"],
-            data_batches=data_batches,
-            reward_model_batch_size=reward_model_batch_size,
-            reward_device=reward_device,
-            reward_device_count=reward_device_count,
-            remote=True,  # remote,
-        )
-
-
-#  Create model
-def run_experiment_remote(
-    experiment,
-):
-
-    # Create model
-    model = create_vllm_model(
-        model_path=experiment.meta["model_path"],
-        temperature=experiment.meta["temperature"],
         max_new_tokens=experiment.meta["max_new_tokens"],
-        max_prompt_length=experiment.meta["max_prompt_length"],
-        device_count=1,
-        gpu_memory_utilization=0.95,
-        stop_tokens=experiment.meta["stop_tokens"],
-        remote=True,
     )
 
     completed = len(experiment.instances())
@@ -510,13 +320,13 @@ def run_experiment_remote(
                 experiment=experiment,
                 model=model,
                 steps=experiment.meta["steps"],
-                reward_device=0,
-                reward_device_count=1,
-                remote=True,
+                reward_model_batch_size=reward_model_batch_size,
+                reward_url=reward_url,
             )
 
     else:
-
+            
+        # Get batched data with start index
         data_batches = get_batched_data(
             model=model,
             dataset_path=experiment.meta["dataset"],
@@ -539,14 +349,14 @@ def run_experiment_remote(
                 data_batches=data_batches,
             )
         elif experiment.meta["variant"] == "quest-rlhf":
-
             run_quest(
                 experiment=experiment,
                 model=model,
                 steps=experiment.meta["steps"],
                 data_batches=data_batches,
-                # reward_model_batch_size=experiment.meta.get("batch_size", 64),
-                reward_device=0,
-                reward_device_count=1,
-                remote=True,
+                reward_model_batch_size=reward_model_batch_size,
+                reward_url=reward_url,
             )
+
+
+run_experiment_remote=run_experiment

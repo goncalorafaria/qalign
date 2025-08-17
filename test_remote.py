@@ -1,4 +1,4 @@
-from qalign.remote import RemoteVLLM
+from qalign.model import RemoteVLLM
 
 
 # google/gemma-3-1b-it

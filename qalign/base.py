@@ -1,6 +1,8 @@
 import copy
 import dataclasses
 from typing import *
+import time
+import functools
 
 import numpy as np
 from scipy.stats import bernoulli
@@ -8,80 +10,16 @@ from tqdm import tqdm
 
  
 import torch
-from numpy.random import randint
-import math
+
 import queue
 import threading
 from copy import deepcopy
 import os
+from qalign.utils.timing import timing_decorator
+from qalign.utils.list import join_accepted_values, process_batch_outputs, repeat_on_reject
+from qalign.utils.math import sample_index, log_prob_index
 
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
-
-def join_accepted_values(accept, proposal, state):
-    return [p if a else s for a, p, s in zip(accept, proposal, state)]
-
-
-def sample_index(truncation: int) -> int:
-    """
-    Samples a random index from 0 to truncation (exclusive), optionally in blocks.
-    """
-    block_size: int = 1
-    return randint(0, truncation // block_size) * block_size
-
-def log_prob_index(index: int, truncation: int) -> float:
-    """
-    Returns the log probability of sampling an index under a uniform discretized distribution.
-    """
-    block_size: int = 1
-    normalization = float(truncation // block_size)
-    return -math.log(normalization)
-        
-def process_batch_outputs(
-    state_path: Any, batch_size: int
-) -> List[List[Dict[str, Any]]]:
-    """
-    Processes batch outputs from a Quest chain into a standardized format.
-    """
-    outputs = []
-    for i in range(batch_size):
-        outputs.append(
-            [
-                {
-                    "t": s["t"],
-                    **{k: v[i] for k, v in s.items() if k != "t"},
-                }
-                for s in state_path
-            ]
-        )
-    return outputs
-
-def repeat_on_reject(output: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Repeats the previous accepted state when a proposal is rejected.
-    This ensures that rejected proposals don't create gaps in the output sequence.
-    
-    Args:
-        output: List of state dictionaries from the MCMC chain
-        
-    Returns:
-        List of state dictionaries with rejected states replaced by previous accepted states
-    """
- 
-    processed_output = []
-    last_accepted_state = None
-    
-    for state in output:
-        # Check if this state was accepted based on the accept field
-        # The accept field is a list of booleans for each chain
-      
-        if state["accept"]:
-            # Update the last accepted state
-            last_accepted_state = state["text"]
-            processed_output.append(state["text"])
-        else:
-            processed_output.append(last_accepted_state)
-            
-    return processed_output
 
 
 class QAlign:
@@ -180,9 +118,10 @@ class QAlign:
         self.logratio_clamp = logratio_clamp
         self.steps = 0
 
+    @timing_decorator('compute_reward')
     def compute_reward(
         self,
-        proposal_text: List[str],
+        text: List[str],
     ) -> List[float]:
         """
         This function calculates the reward for a given proposal text.
@@ -195,8 +134,9 @@ class QAlign:
         List[float]: The calculated rewards.
         """
         value = self.rm.evaluate(
-            proposal_text,
+            text,
         )
+        
         return value
 
     def get_prompt(
@@ -225,8 +165,10 @@ class QAlign:
         # Decode the completion text
         completions_text = self.model.decode_tokenize(completions)
         
+ 
+        
         state = QAlign.State(
-            reward=self.compute_reward(completions_text),
+            reward=self.compute_reward([p + c for p, c in zip(self.prompts,completions_text)]),
             completion=completions,
             text=completions_text,
             index=[0] * len(completions),
@@ -320,6 +262,7 @@ class QAlign:
 
         return log_transition_ratio
 
+    @timing_decorator('transition')
     def transition(
         self,
         previous_state: State,
@@ -335,8 +278,7 @@ class QAlign:
             )
             for completion in completions
         ]
-        if DEBUG:
-            print("idx:",indeces)
+        
 
         prefix = [
             completion[:index]
@@ -388,7 +330,7 @@ class QAlign:
         
         
         proposal_reward = self.compute_reward(
-            proposal_state.text,
+            [p + c for p, c in zip(self.prompts,proposal_state.text)],
         )
         
 
@@ -565,6 +507,9 @@ class QAlign:
         warm_start: Union[None, List[str]] = None,
         use_tqdm: bool = False,
         n: Union[None, int] = None,
+        callbacks: List[Callable] = [],
+        tqdm_index: int = 0,
+        tqdm_total: int = 1,
     ) -> Output:
         """
         This function runs the Markov Chain Monte Carlo (MCMC) method with Metropolis-Hastings algorithm.
@@ -587,24 +532,27 @@ class QAlign:
 
         self.steps = steps
         # Draw the initial state
+        self.prompts = prompts
         prompt_ids = self.get_prompt(prompts)
-        self.rm.set_context(prompts)
+        #self.rm.set_context(prompts)
                 
         state = self.start_chain(
             prompt_ids,
             warm_start=warm_start,
         )
-
+        for callback in callbacks:
+            callback(state)
+            
         if use_tqdm:
             # We mod by 20 to avoid having too many progress bars on screen
-            unique_position = id(self) // 100 % 5
+            unique_position = tqdm_index % tqdm_total
 
             # Create a short unique identifier for the description
-            unique_id = hex(id(self))[-5:]  # Last 6 characters of hex ID
+            #unique_id = hex(id(self))[-5:]  # Last 6 characters of hex ID
 
             iter = tqdm(
                 range(n),
-                desc=f"Chain {unique_id}",
+                desc=f"Chain {tqdm_index}",
                 position=unique_position,
                 leave=True,
             )
@@ -625,15 +573,15 @@ class QAlign:
                 bernoulli(A).rvs(),
             ).reshape(A.shape)
             
-            if DEBUG:
-                print("accept:",accept)
-                print("--"*20)
 
             state = self.join_accepted_values(
                 accept=accept,
                 previous_state=state,
                 proposal_state=proposal_state,
             )
+            
+            for callback in callbacks:
+                callback(state)
 
             self.stack(
                 proposal_state,
@@ -647,16 +595,21 @@ class QAlign:
         
         outputs=process_batch_outputs(self.state_path, len(prompts))
         dupped_outputs= [ {"input":ind, "outputs": repeat_on_reject(output)} for ind,output in zip(prompts,outputs)]
+        
+        # Print timing statistics if DEBUG is enabled
+        if DEBUG:
+            self.print_timing_stats()
+        
         return QAlign.Output(
-            state_path=self.state_path,
-            texts=dupped_outputs
+            state_path=outputs,
+            texts=dupped_outputs,
         )
 
 
 
     def run_pipelined(
         self, 
-        data_batches,
+        prompts,
         steps,
         workers=0,
         use_tqdm=False,
@@ -664,7 +617,7 @@ class QAlign:
     ):
         if workers==0:
             return self.run(
-                input_data=data_batches,
+                prompts=prompts,
                 steps=steps,
                 use_tqdm=use_tqdm,
                 **kwargs,
@@ -679,9 +632,9 @@ class QAlign:
         # Event to signal threads to stop
         stop_event = threading.Event()
         
-        chain =None
+        chain = self
+        
         def worker_thread(thread_id):
-            
         
             """Worker thread that processes batches"""
             while not stop_event.is_set():
@@ -690,12 +643,14 @@ class QAlign:
                     batch_index, data_batch = batch_queue.get(timeout=1)
                     
                     chain_outputs = deepcopy(chain).run(
-                        input_data=data_batch,
+                        prompts=data_batch,
                         steps=steps,
                         use_tqdm=use_tqdm,
+                        tqdm_index=thread_id,
+                        tqdm_total=workers,
                     )
                     
-                    outputs = process_batch_outputs(chain_outputs, len(data_batch))
+                    outputs = chain_outputs.state_path
                     
                     # Put result in priority queue with batch index as priority
                     result_queue.put((batch_index, (data_batch, outputs)))
@@ -719,7 +674,7 @@ class QAlign:
         
         # Producer: Add batches to queue
         def producer():
-            for i, data_batch in enumerate(data_batches):
+            for i, data_batch in enumerate(prompts):
                 batch_queue.put((i, data_batch))
         
         producer_thread = threading.Thread(target=producer)
@@ -727,7 +682,7 @@ class QAlign:
         
         
         # Collector: Process results in order
-        total_batches = len(data_batches)
+        total_batches = len(prompts)
         processed_count = 0
         next_expected_index = 0
         
@@ -778,3 +733,27 @@ class QAlign:
             t.join()
         
         return total_results_packed
+    
+    def print_timing_stats(self):
+        """
+        Print timing statistics for compute_reward and transition operations.
+        Only prints if DEBUG is True.
+        """
+            
+        compute_reward_count = getattr(self, 'compute_reward_count', 0)
+        transition_count = getattr(self, 'transition_count', 0)
+        
+        if compute_reward_count > 0:
+            compute_reward_running_mean = getattr(self, 'compute_reward_running_mean', 0.0)
+            print(f"\n=== Compute Reward Timing Statistics ===")
+            print(f"Total calls: {compute_reward_count}")
+            print(f"Running average time: {compute_reward_running_mean:.6f} seconds")
+        
+        if transition_count > 0:
+            transition_running_mean = getattr(self, 'transition_running_mean', 0.0)
+            print(f"\n=== Transition Timing Statistics ===")
+            print(f"Total calls: {transition_count}")
+            print(f"Running average time: {transition_running_mean:.6f} seconds")
+        
+        if compute_reward_count > 0 or transition_count > 0:
+            print("=" * 50)

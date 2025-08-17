@@ -10,6 +10,8 @@ from expkit import Exp
 def main(
     experiment_name="",
     save_path: str = "llama3.2-outputs/",
+    model_url: str = "http://localhost:8080",
+    reward_url: str = "http://localhost:8080",
 ):
 
     storage = DiskStorage(save_path, "rw")
@@ -19,6 +21,8 @@ def main(
 
         run_experiment_remote(
             experiment=experiment,
+            model_url=model_url,
+            reward_url=reward_url,
         )
 
     else:
