@@ -541,35 +541,19 @@ class TextDataset(Dataset):
     def __init__(
         self,
         texts,
-        tokenizer,
-        max_length=512,
-        add_special_tokens=False,
+   
     ):
         self.texts = texts
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.add_special_tokens = add_special_tokens
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
         text = self.texts[idx]
+        
+        return text
 
-        encoding = self.tokenizer.encode_plus(
-            text,
-            add_special_tokens=False,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_attention_mask=True,
-            return_tensors="pt",
-            # pad_token=self.tokenizer.eos_token,
-        )
-        return {
-            "input_ids": encoding["input_ids"].flatten(),
-            "attention_mask": encoding["attention_mask"].flatten(),
-        }
+
 
 
 def get_loader(
@@ -584,11 +568,32 @@ def get_loader(
         tokenizer,
         max_length=max_length,
     )
+    
+    def collate_fn(batch):
+    
+        texts = [item["text"] for item in batch]
+        
+        tokenized = tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True , 
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=False,
+            #return_overflowing_tokens=True,
+        )
+        
+        return {
+            "input_ids": tokenized["input_ids"],
+            "attention_mask": tokenized["attention_mask"],
+        }
+    
     loader = DataLoader(
         ds,
         batch_size=batch_size,
         shuffle=False,
         num_workers=2,
+        collate_fn=collate_fn
     )
 
     if use_tqdm:
