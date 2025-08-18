@@ -565,13 +565,11 @@ def get_loader(
 ):
     ds = TextDataset(
         texts,
-        tokenizer,
-        max_length=max_length,
     )
     
     def collate_fn(batch):
     
-        texts = [item["text"] for item in batch]
+        texts = [item for item in batch]
         
         tokenized = tokenizer(
             texts,

@@ -243,7 +243,7 @@ class RemoteReward(Reward):
         polling_interval: float = 0.5,
         timeout: float = 300,  # 5 minutes default timeout
         batch_size=64, 
-        server_format: str = "legacy",
+        server_format: str = "vllm",
     ):
         """
         Client for interacting with the Reward Model Server.
@@ -271,8 +271,8 @@ class RemoteReward(Reward):
         self.routes = {
             "legacy":{
                 "health": "health",
-                "evaluate": "evaluate",
-                "arg":"texts",
+                "evaluate": "classify",
+                "arg":"input",
             },
             "vllm": {
                 "health": "v1/models",
@@ -429,6 +429,7 @@ class RewardModel(Reward):
         )"""
         self.kwargs = {"batch_size": self.batch_size}
         self.clamp = clamp
+        self.max_length = max_length
 
         from transformers import (
             AutoTokenizer,

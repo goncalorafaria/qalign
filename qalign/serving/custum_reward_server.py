@@ -83,9 +83,9 @@ def process_queue():
                     RESULTS[task_id] = {
                         "status": "failed",
                         "error": str(e),
-                        "extra": [len(t) for t in request.texts],
+                        "extra": [len(t) for t in request.input],
                     }
-                    print("falty packet? :" + str(request.texts))
+                    print("falty packet? :" + str(request.input))
                     import traceback
 
                     tb = traceback.format_exc()
@@ -101,7 +101,7 @@ def process_queue():
 
 def create_server(
     reward_type: str = "value",
-    reward_model_path: str = "/gscratch/ark/graf/quest-rlhf/qflow/rm/artifacts/llama3/8b8b/mathcot/full/reward",
+    reward_model_path: str = "/gscratch/ark/graf/quest-rlhf/qflow/rm/artifacts/llama3/8b8b/gsm8k/full/reward/",
     reward_model_batch_size: int = 8,
     reward_device: int = 0,
     reward_device_count: int = 1,
@@ -170,7 +170,7 @@ def create_server(
         RESULTS[task_id] = {"status": "pending"}
         TASK_QUEUE.put((task_id, request))
 
-        print(f"Task {task_id} added to queue. batchsize: {len(request.texts)}")
+        print(f"Task {task_id} added to queue. batchsize: {len(request.input)}")
         # Poll for the result.
         timeout = request_timeout  # maximum time (in seconds) to wait for a result
         elapsed = 0.0
@@ -204,6 +204,22 @@ def create_server(
             "queue_size": TASK_QUEUE.qsize(),
         }
 
+    @app.get("/v1/models")
+    async def models():
+        if MODEL is None:
+            raise HTTPException(status_code=503, detail="Model not loaded")
+        if not TASK_THREAD or not TASK_THREAD.is_alive():
+            raise HTTPException(
+                status_code=503, detail="Task processing thread not running"
+            )
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": reward_model_path,
+                }
+            ],
+        }
     # Fix loggers
     #fix_loggers(name="transformers")
 

@@ -145,7 +145,7 @@ class QAlign:
     ):
         return self.model.encode(input_data)
 
-    def draw_initial_state(self, prompt) -> State:
+    def draw_initial_state(self, prompt, conversations) -> State:
         """
         This function initializes the Markov chain given a prompt.
 
@@ -165,10 +165,13 @@ class QAlign:
         # Decode the completion text
         completions_text = self.model.decode_tokenize(completions)
         
- 
+
+        rewards = self.compute_reward(
+            [ c + [{"role":"assistant", "content":t}] for c,t in zip(conversations,completions_text)],
+        )
         
         state = QAlign.State(
-            reward=self.compute_reward([p + c for p, c in zip(self.prompts,completions_text)]),
+            reward=rewards,
             completion=completions,
             text=completions_text,
             index=[0] * len(completions),
@@ -377,14 +380,14 @@ class QAlign:
 
         return state
 
-    def start_chain(self, prompt, warm_start=None) -> State:
+    def start_chain(self, prompt, conversations, warm_start=None) -> State:
         """
         Start the Markov chain with an initial state.
         """
         
 
         if warm_start is None:
-            state = self.draw_initial_state(prompt)
+            state = self.draw_initial_state(prompt, conversations)
 
             # Compute the reward for the initial completion
             #for i, t in enumerate(state.text):
@@ -512,6 +515,7 @@ class QAlign:
                 
         state = self.start_chain(
             prompt_ids,
+            conversations,
             warm_start=warm_start,
         )
         for callback in callbacks:

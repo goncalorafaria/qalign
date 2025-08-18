@@ -168,6 +168,9 @@ class RemoteVLLM:
             for p in prompt_text
         ]
 
+        if DEBUG:
+            print("model_packet:",payload[0])
+
         results = self._post_with_retries("/v1/completions", payload)
 
         completions = [
