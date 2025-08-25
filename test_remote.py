@@ -5,8 +5,8 @@ from qalign.model import RemoteVLLM
 
 
 model = RemoteVLLM(
-    server_url="http://127.0.0.1:11434",
-    
+    server_url="http://g3090.hyak.local:8080",
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
 )
 
-print(model.ancestral([{"prompt": "What is the capital of France?"}]))
+print(model.ancestral(["What is the capital of France?"]))

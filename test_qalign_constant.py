@@ -6,8 +6,8 @@ from qalign.base import QAlign
 
 model = RemoteVLLM(
     server_url="http://localhost:8080",
-    model_path="meta-llama/Llama-3.1-8B-Instruct",
-    max_prompt_length=1000,
+    model_path="allenai/Llama-3.1-Tulu-3-8B-SFT",
+    max_prompt_length=100,
     max_new_tokens=1000,
 )
 
@@ -19,13 +19,12 @@ chain = QAlign(
     beta=1.0, 
 )
 
-t = [{"role": "user", "content": "What district is Guimarães in?"}]
+t = [{"role": "user", "content": "What district is Guimarães in? Answer by explaining all of portuguese history in 1000 words."}]
 
 results =chain.run(
-    conversations=[t],
-    steps=8,
+    conversations=[t]*8,
+    steps=16,
+    use_tqdm=True,
 )
-
-
 
 #print(results)

@@ -476,7 +476,6 @@ class QAlign:
         steps: int = 100,
         warm_start: Union[None, List[str]] = None,
         use_tqdm: bool = False,
-        n: Union[None, int] = None,
         callbacks: List[Callable] = [],
         tqdm_index: int = 0,
         tqdm_total: int = 1,
@@ -504,8 +503,7 @@ class QAlign:
         
         self.state_path = []
         
-        if n is None:
-            n = steps
+
 
         self.steps = steps
         # Draw the initial state
@@ -529,13 +527,13 @@ class QAlign:
             #unique_id = hex(id(self))[-5:]  # Last 6 characters of hex ID
 
             iter = tqdm(
-                range(n),
+                list(range(self.steps)),
                 desc=f"Chain {tqdm_index}",
                 position=unique_position,
                 leave=True,
             )
         else:
-            iter = range(n)
+            iter = list(range(self.steps))
 
         # Run the chain for the specified number of steps
         for i in iter:
@@ -742,3 +740,7 @@ class QAlign:
         
         if compute_reward_count > 0 or transition_count > 0:
             print("=" * 50)
+            
+            
+    def __str__(self):
+        return f"QAlign(model={self.model}, reward={self.rm})"

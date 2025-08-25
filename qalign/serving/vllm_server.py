@@ -152,7 +152,7 @@ class VLLMServerManager:
         }
         asyncio.run(
             self.registry.register_server(
-                url="http://" + self.hostname, port=self.port, metadata=metadata
+                port=self.port, metadata=metadata
             )
         )
 

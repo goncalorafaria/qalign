@@ -21,15 +21,15 @@ class RemoteVLLM:
         stop_tokens: list = None,
         temperature: float = 1.0,
         timeout: float = 300,
-        max_retries: int = 20,
+        max_retries: int = 5,
     ):
         
         self.server_url = server_url.rstrip("/")
        
-        
+    
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
-        self.max_prompt_length = max_prompt_length
+        self.max_prompt_length = max_prompt_length - 1
          
         self.timeout = timeout
         self.max_retries = max_retries
@@ -65,7 +65,7 @@ class RemoteVLLM:
         return [
             self.tokenizer.encode(
                 p,
-                max_length=self.max_prompt_length,
+                max_length=self.max_prompt_length+self.max_new_tokens,
                 truncation=True,
                 add_special_tokens=False,
                 **tokenizer_kwargs
@@ -150,7 +150,8 @@ class RemoteVLLM:
         #prompt_text = self.decode_tokenize(
         #    input_data, skip_special_tokens=True, spaces_between_special_tokens=False
         #)
-        
+        lengths = [len(x) for x in input_data]
+        #print("lengths-prefix:",lengths)
          ## skip special tokens at False was causing major issues.
         prompt_text = self.decode_tokenize(input_data)
         
@@ -179,9 +180,9 @@ class RemoteVLLM:
             for choice in result.get("choices", [])
         ]
 
-
         completion_ids = [xi for xi in self.tokenize(completions)]
-
+        #print("lengths-completion:",[len(xi) for xi in completion_ids])
+        
         return completion_ids 
 
     def ancestral(
@@ -210,3 +211,6 @@ class RemoteVLLM:
             choice["text"] for result in results for choice in result.get("choices", [])
         ]
         return unflatten_list(completions, [n] * len(input_data))
+
+    def __str__(self):
+        return f"RemoteVLLM(model_path={self.model_path}, server_url={self.server_url})"
