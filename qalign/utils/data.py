@@ -15,11 +15,16 @@ DEFAULT_AI_PROMPT = PromptTemplate.from_template("Answer: {content}\n")
 ## qalign
 from qalign.utils.examples import MATH_EXAMPLARS, GSM8K_EXEMPLARS
 
-## quest
-from quest.model.base import (
-    DEFAULT_TEMPLATE,
+from torch.utils.data import (
+    Dataset,
+    DataLoader,
 )
+from typing import List
+from tqdm import tqdm
 
+## quest
+
+DEFAULT_TEMPLATE = PromptTemplate.from_template("{prompt}")
 
 class FlexiblePromptTemplate:
     def __init__(self, template):
@@ -563,13 +568,6 @@ def get_data_iterable(
 
     return list(ds)
 
-
-from torch.utils.data import (
-    Dataset,
-    DataLoader,
-)
-from typing import List
-from tqdm import tqdm
 
 
 class TextDataset(Dataset):
