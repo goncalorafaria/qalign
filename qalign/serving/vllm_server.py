@@ -11,7 +11,7 @@ import math
 import random
 
 
-from literegistry import ServerRegistry, FileSystemKVStore
+from literegistry import ServerRegistry, FileSystemKVStore, RedisKVStore
 
 
 def parse_vllm_requests(metrics_text: str) -> Tuple[float, float]:
@@ -88,8 +88,19 @@ class VLLMServerManager:
         self.metrics_port = self.port
         self.dtype = dtype
         self.hostname = hostname
+        self.url = f"http://{socket.gethostname()}.hyak.local"
 
         # Initialize registry
+        
+        if "redis://" in registry_dir:
+            store = RedisKVStore(registry_dir)
+        else:
+            store = FileSystemKVStore(registry_dir)
+            
+        self.registry = ServerRegistry(
+            store=store,#FileSystemKVStore(registry_dir),
+            max_history=max_history,
+        )
 
         self.registry = ServerRegistry(
             store=FileSystemKVStore(registry_dir),
@@ -152,7 +163,9 @@ class VLLMServerManager:
         }
         asyncio.run(
             self.registry.register_server(
-                port=self.port, metadata=metadata
+                url=self.url,
+                port=self.port, 
+                metadata=metadata
             )
         )
 
@@ -169,7 +182,7 @@ class VLLMServerManager:
         """Run heartbeat in a loop"""
         while self.should_run:
             if self.check_health():
-                asyncio.run(self.registry.heartbeat(self.port))
+                asyncio.run(self.registry.heartbeat(self.url, self.port))
                 # print("Heartbeat sent. Status: healthy")
             else:
                 print("Server unhealthy!")

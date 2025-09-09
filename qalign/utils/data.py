@@ -231,6 +231,36 @@ def processmath_data(
     )
 
 
+def processdeepmath_data(
+    entry, tokenizer, prompt_template, format="chat",  **kwargs
+):
+  
+    math_messages = []
+
+    chat_template = math_messages + [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=entry["question"]),
+        },
+        {
+            "role": "assistant",
+            "content": entry["r1_solution_1"],
+        },
+    ]
+
+    # Get the final answer for evaluation
+    # answer = get_last_math(chat_template[-1]["content"])
+    # if answer is None:
+    #    return None
+
+    return general_process_data(
+        chat_template_prompt=chat_template[:-1],
+        format=format,
+        tokenizer=tokenizer,
+        answer=entry["r1_solution_1"],  # answer,
+    )
+
+
 def processalpaca_data(
     entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
 ):
@@ -458,6 +488,11 @@ SUPPORTED_DATASETS = {
         processmmlu_data,
         "edinburgh-dawg/mmlu-redux",
         process_all_redux_data,
+    ),
+     "zwhe99/DeepMath-103K": (
+        {},
+        processdeepmath_data,
+        "zwhe99/DeepMath-103K",
     ),
     # eval
     # "tatsu-lab/alpaca_eval", "alpaca_eval")["eval"]

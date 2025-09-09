@@ -21,7 +21,7 @@ class RemoteVLLM:
         stop_tokens: list = None,
         temperature: float = 1.0,
         timeout: float = 300,
-        max_retries: int = 5,
+        max_retries: int = 15,
     ):
         
         self.server_url = server_url.rstrip("/")
@@ -201,6 +201,7 @@ class RemoteVLLM:
                 "max_tokens": self.max_new_tokens,
                 "temperature": self.temperature, 
                 "n": 1,
+                "stop": self.stop_tokens,
             }
             for p in prompts
         ]
