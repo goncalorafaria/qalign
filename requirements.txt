@@ -1,0 +1,16 @@
+ 
+datasets
+
+requests
+aiohttp
+
+langchain
+tqdm
+fire
+rich
+
+# Experiment Management and Storage
+expkit-core
+
+# Additional Dependencies
+mutabledict

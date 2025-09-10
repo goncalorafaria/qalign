@@ -84,7 +84,7 @@ class RemoteVLLM:
             
             ## check if self.model_path is in the response
             if not len([1 for x in resp.json()["data"] if x["id"] == self.model_path ]):
-                raise ConnectionError(f"Model {self.model_path} not found in the response")
+                raise ConnectionError(f"Model {self.model_path} not found in the response: - {resp.json()} - {url}")
             
             if DEBUG:
                 print(f"Server[{self.model_path}]: {self.server_url} is healthy and ready for requests.")
