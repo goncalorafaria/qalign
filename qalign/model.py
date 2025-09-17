@@ -97,6 +97,39 @@ class RemoteVLLM:
         return asyncio.run(self._post_with_retries_async(endpoint, payload))
     
     async def _post_with_retries_async(self, endpoint, payload):
+        async def _make_request_with_retries(session, p):
+            for attempt in range(self.max_retries):
+                try:
+                    async with session.post(
+                        f"{self.server_url}{endpoint}",
+                        json=p,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                        if isinstance(data, dict):
+                            data = [data]
+                        return data
+                except Exception as e:
+                    if attempt == self.max_retries - 1:
+                        raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
+                    await asyncio.sleep(1)
+        
+        # Use a single session for all requests
+        async with aiohttp.ClientSession() as session:
+            # Create tasks for all requests and run them concurrently
+            tasks = [_make_request_with_retries(session, p) for p in payload]
+            results = await asyncio.gather(*tasks)
+        
+        # Flatten results
+        flattened_results = []
+        for result in results:
+            flattened_results.extend(result)
+        
+        return flattened_results
+
+    async def _post_with_retries_async_original(self, endpoint, payload):
+        """Original approach: separate session for each request"""
         async def _make_request_with_retries(p):
             for attempt in range(self.max_retries):
                 try:
