@@ -102,10 +102,6 @@ class VLLMServerManager:
             max_history=max_history,
         )
 
-        self.registry = ServerRegistry(
-            store=FileSystemKVStore(registry_dir),
-            max_history=max_history,
-        )
         self.process = None
         self.should_run = True
 
