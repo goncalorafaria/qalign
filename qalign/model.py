@@ -1,4 +1,3 @@
-from langchain.prompts import PromptTemplate
 from transformers import AutoTokenizer
 import requests
 import aiohttp

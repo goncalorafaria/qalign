@@ -19,15 +19,12 @@ Increasing test-time computation has emerged as a promising direction for improv
 -----
 ## <div align="center">Dependencies</div>
 
-This project relies strongly on the following external libraries:
+This project was based on the following external libraries:
 - [deepspin/quest-decoding](https://github.com/deep-spin/quest-decoding)
-- [goncalorafaria/expkit](https://github.com/goncalorafaria/expkit-core)
-- [goncalorafaria/literegistry](https://github.com/goncalorafaria/literegistry)
 
+For saving experiment data we use the expkit-core package. 
 ```bash
-pip install quest-decoding
-pip install expkit-core
-pip install literegistry 
+pip install expkit-core # required only for the experiment 
 ```
 
 Install the required packages:
@@ -85,40 +82,76 @@ This guide will help you get started running QAlign.
 
 ## Basic Usage
 
+To quickly try out QAlign, you'll need two servers running compatible language models:  
+- A **generation model** (for sampling text responses)  
+- A **reward model** (for evaluating responses)
+
+You can use [vllm](https://github.com/vllm-project/vllm) for both, or swap in `sglang` as appropriate.
+Below are *example commands* (adjust model paths and ports as needed):
+
+**1. Start the Reward Model Server (on port 8001):**
+```bash
+vllm serve Skywork/Skywork-Reward-Llama-3.1-8B-v0.2 --task classify --port 8001
+```
+
+**2. Start the Generation Model Server (on port 8000):**
+```bash
+vllm serve meta-llama/Llama-3.1-8B-Instruct --task classify --port 8000
+```
+
+Once the servers are running, you can use the following Python script to sample and align responses via QAlign:
+
 ```python
+from qalign.reward import RemoteReward
+from qalign.model import RemoteVLLM
+from qalign.base import QAlign
 
-from qalign.remote import RemoteVLLM
-from qalign.reward import ConstantReward
-from qalign.base import QAlign 
-
-
+# Define your generation model (connected to localhost:8000)
 model = RemoteVLLM(
-    server_url="http://g3090.hyak.local:8080",
+    server_url="http://localhost:8000",
     model_path="meta-llama/Llama-3.1-8B-Instruct",
-    max_prompt_length=1000,
-    max_new_tokens=1000,
+    max_prompt_length=100,
+    max_new_tokens=50,
 )
 
-reward = ConstantReward(1.0)
+# Define the remote reward model (connected to localhost:8001)
+reward = RemoteReward(
+    server_url="http://localhost:8001",
+    model_path="Skywork/Skywork-Reward-Llama-3.1-8B-v0.2",
+    server_format="vllm",
+)
 
+# Set up the QAlign chain
 chain = QAlign(
     model=model,
     reward=reward,
     beta=1.0, 
 )
 
-t = model.tokenizer.apply_chat_template(
-    [{"role": "user", "content": "What district is Guimarães in?"}],
-    tokenize=False,
-    add_generation_prompt=True,
+# Example conversation/question
+question = (
+    "Joana has 10 apples. She gives it to The Lord of Fire which multiplies them by 2 every 10 seconds. "
+    "One in five of the apples are poisoned and will kill anyone who eats them. "
+    "All of the apples will be eaten by a hungry crowd. How many people die after 50 seconds?"
 )
 
-results =chain.run(
-    prompts=[t],
+# Run QAlign for 8 steps
+results = chain.run(
+    conversations=[
+        [{"role": "user", "content": question}]
+    ],
     steps=8,
+    use_tqdm=True,
 )
 
+# results.state_path contains stepwise generations without-accept/reject filtering
 ```
+
+**Tips:**
+- You can point `server_url` to a remote server, e.g., `"http://remotehost:8001"`, as long as your reward/generation servers are accessible.
+- `max_prompt_length` and `max_new_tokens` can be tuned based on your hardware/needs.
+- For other supported server formats or reward models, see the documentation.
+
 
 -----
 

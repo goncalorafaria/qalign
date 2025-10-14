@@ -6,11 +6,7 @@ This script demonstrates the new async POST functionality using direct server UR
 
 from qalign.reward import RemoteReward
 from qalign.model import RemoteVLLM
-from qalign.reward import ConstantReward
 from qalign.base import QAlign
-from qalign.utils.term import animate_llm_responses, AsyncAnimateLLMResponsesCallback
-# google/gemma-3-1b-it
-import time
 
 model = RemoteVLLM(
     server_url="http://g3054.hyak.local:8000",
