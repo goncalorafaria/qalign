@@ -13,19 +13,16 @@ from qalign.utils.term import animate_llm_responses, AsyncAnimateLLMResponsesCal
 import time
 
 model = RemoteVLLM(
-    server_url="http://localhost:8080",
+    server_url="http://g3054.hyak.local:8000",
     model_path="meta-llama/Llama-3.1-8B-Instruct",
-    max_prompt_length=1000,
-    max_new_tokens=1000,
+    max_prompt_length=100,
+    max_new_tokens=50,
 )
 
 reward = RemoteReward(
-    server_url="http://localhost:9319",
-    model_path='/gscratch/ark/graf/quest-rlhf/qflow/rm/artifacts/llama3/8b8b/gsm8k/full/reward/',
-    max_retries=50,
-    polling_interval=0.5,
-    timeout=300,
-    batch_size=8,
+    server_url="http://g3045.hyak.local:8000",
+    model_path='Skywork/Skywork-Reward-Llama-3.1-8B-v0.2',
+    server_format="vllm",
 )
 
 chain = QAlign(
@@ -39,25 +36,13 @@ steps = 8
 
 t = [{"role": "user", "content": question}]
 
-callback = AsyncAnimateLLMResponsesCallback(
-    prompt=question,
-    total_steps=steps,
+results = chain.run(
+    conversations=[t],
+    steps=steps,
+    use_tqdm=True,
 )
 
-with callback:
-    results =chain.run(
-        conversations=[t],
-        steps=steps,
-        callbacks=[callback],
-    )
-
-# 
 state_path = [ x["text"] for x in results.state_path[0] if x["accept"]] 
-
-
-
-
-#animate_llm_responses(state_path,prompt=question)
 
 
 

@@ -9,11 +9,13 @@ from itertools import islice
 import os
 from typing import List
 import gc
+import math
 
+from scipy.special import logit
 #from quest.utils.logger import fix_loggers
 from qalign.utils.data import get_loader
 import numpy as np
-
+from transformers import AutoTokenizer
 from transformers import AutoModelForSequenceClassification
 #fix_loggers(name="transformers")
 
@@ -243,7 +245,7 @@ class RemoteReward(Reward):
         polling_interval: float = 0.5,
         timeout: float = 300,  # 5 minutes default timeout
         batch_size=64, 
-        server_format: str = "vllm",
+        server_format: str = "sglang",
     ):
         """
         Client for interacting with the Reward Model Server.
@@ -267,20 +269,29 @@ class RemoteReward(Reward):
         self.timeout = timeout
         self.model_path = model_path 
         self.batch_size = batch_size
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         
         self.routes = {
             "legacy":{
                 "health": "health",
                 "evaluate": "classify",
                 "arg":"input",
+                "parse":lambda x: x["rewards"],
             },
             "vllm": {
-                "health": "v1/models",
+                "health": "v1/models",#"v1/models",
                 "evaluate": "classify",
                 "arg":"input",
-            }
+                "parse":lambda x:logit( x["data"][0]["probs"][0]),
+            },
+            "sglang": {
+                "health": "health",
+                "evaluate": "classify",
+                "arg":"text",
+                "parse":lambda x: x["embedding"][0],
+            },
         }
-        
+                
         self.routes = self.routes[server_format]
         
         # Test connection and get model info
@@ -338,8 +349,11 @@ class RemoteReward(Reward):
         tasks = [_make_request_with_retries(p) for p in payload]
         results = await asyncio.gather(*tasks)
         
+        if DEBUG:
+            print(results[0])
         # Extract rewards from results
-        rewards = [r for result in results for r in result["rewards"]]
+        rewards = [self.routes["parse"](result) for result in results ]
+        
         return rewards
 
     def evaluate(self, conversations, use_tqdm=False, **kwargs):
@@ -361,7 +375,13 @@ class RemoteReward(Reward):
 
         # Create payloads with texts and context
         payloads = [
-            {"input": t} for t in conversations
+            {"input": 
+                self.tokenizer.apply_chat_template(
+                t,
+                tokenize=False,
+                add_generation_prompt=False,
+                )
+          } for t in conversations
         ]
         
         if DEBUG:
@@ -370,12 +390,14 @@ class RemoteReward(Reward):
         # Pack payloads into batches
         packed_payload = [
             {
-                "input": [p["input"] for p in packed],
-                "model": self.model_path,
+                self.routes["arg"]: p["input"],
+                "model": self.model_path
             }
-            for packed in chunked(payloads, temp_batch)
+            for p in payloads
         ]
 
+        if DEBUG:   
+            print("<rm> payload:",packed_payload[0])
         # Evaluate using the async method (wrapped synchronously)
         results = self._evaluate(packed_payload)
 
