@@ -96,7 +96,7 @@ vllm serve Skywork/Skywork-Reward-Llama-3.1-8B-v0.2 --task classify --port 8001
 
 **2. Start the Generation Model Server (on port 8000):**
 ```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct --task classify --port 8000
+vllm serve meta-llama/Llama-3.1-8B-Instruct  --port 8000
 ```
 
 Once the servers are running, you can use the following Python script to sample and align responses via QAlign:

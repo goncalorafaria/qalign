@@ -245,7 +245,7 @@ class RemoteReward(Reward):
         polling_interval: float = 0.5,
         timeout: float = 300,  # 5 minutes default timeout
         batch_size=64, 
-        server_format: str = "sglang",
+        server_format: str = "vllm",
     ):
         """
         Client for interacting with the Reward Model Server.

@@ -69,7 +69,6 @@ def create_experiment(
         meta=meta,
     )
 
-
 def create_extension_experiment(storage, experiment, new_steps=1024):
     samples = [
         {
@@ -96,8 +95,6 @@ def create_extension_experiment(storage, experiment, new_steps=1024):
 
     return new_exp
 
-
-
 def process_batch_outputs(
     chain_outputs: Any, batch_size: int
 ) -> List[List[Dict[str, Any]]]:
@@ -116,7 +113,6 @@ def process_batch_outputs(
             ]
         )
     return outputs
-
 
 def get_batched_data(
     model,
