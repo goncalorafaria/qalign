@@ -246,7 +246,7 @@ class RemoteReward(Reward):
         timeout: float = 300,  # 5 minutes default timeout
         #batch_size=64, 
         server_format: str = None,  # Auto-detect if None
-        max_concurrent_requests: int = 512,
+        max_concurrent_requests: int = 256,
     ):
         """
         Client for interacting with the Reward Model Server.
