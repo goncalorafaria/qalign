@@ -1,6 +1,6 @@
 from typing import *
 
-from quest.reward.remote import RemoteReward, RemoteReward
+from qalign.reward import RemoteReward
 
 ## expkit
 from expkit.setup import ExpSetup
@@ -43,12 +43,10 @@ def main(
 
     else:
 
-        import pdb; pdb.set_trace()
         
         reward = RemoteReward(
             model_path=reward_model_path,
             server_url=model_url,
-            max_parallel_requests=1024,
         )
         
         ps_eval = RewardEval(

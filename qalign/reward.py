@@ -244,34 +244,35 @@ class RemoteReward(Reward):
         max_retries: int = 50,
         polling_interval: float = 0.5,
         timeout: float = 300,  # 5 minutes default timeout
-        batch_size=64, 
-        server_format: str = "vllm",
+        #batch_size=64, 
+        server_format: str = None,  # Auto-detect if None
+        max_concurrent_requests: int = 512,
     ):
         """
         Client for interacting with the Reward Model Server.
 
         Args:
-            server_url: Base URL of the reward model server
+            server_url: Base URL of the reward model server (gateway URL)
             model_path: Path/name of the model
             max_retries: Maximum number of status check retries
             polling_interval: Time between status checks in seconds
             timeout: Maximum time to wait for result in seconds
-            reward_type: Type of reward model (contextual, value, qe, etc.)
-            batch_size: Size of batches for processing 
+            server_format: Backend format ("vllm", "sglang", "legacy"). Auto-detected if None.
+            max_concurrent_requests: Maximum concurrent requests
         """
 
         super().__init__(f"rm:{model_path}")
         
-
+        self.max_concurrent_requests = max_concurrent_requests
         self.server_url = server_url.rstrip("/")
         self.max_retries = max_retries
         self.polling_interval = polling_interval
         self.timeout = timeout
         self.model_path = model_path 
-        self.batch_size = batch_size
+        #self.batch_size = batch_size
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         
-        self.routes = {
+        self.routes_config = {
             "legacy":{
                 "health": "health",
                 "evaluate": "classify",
@@ -279,23 +280,77 @@ class RemoteReward(Reward):
                 "parse":lambda x: x["rewards"],
             },
             "vllm": {
-                "health": "v1/models",#"v1/models",
+                "health": "v1/models",
                 "evaluate": "classify",
                 "arg":"input",
                 "parse":lambda x:logit( x["data"][0]["probs"][0]),
             },
             "sglang": {
-                "health": "health",
+                "health": "v1/models",
                 "evaluate": "classify",
                 "arg":"text",
                 "parse":lambda x: x["embedding"][0],
             },
         }
-                
-        self.routes = self.routes[server_format]
+        
+        # Auto-detect backend if not specified
+        if server_format is None:
+            server_format = self._detect_backend()
+            print(f"Auto-detected backend: {server_format}")
+        
+        self.server_format = server_format
+        self.routes = self.routes_config[server_format]
         
         # Test connection and get model info
         self._check_health()
+    
+    def _detect_backend(self) -> str:
+        """
+        Auto-detect the backend type by querying the gateway's /v1/models endpoint.
+        
+        Returns:
+            str: Backend type ("vllm", "sglang", or "legacy")
+        """
+        import requests
+        
+        try:
+            # Query the gateway's v1/models endpoint
+            response = requests.get(f"{self.server_url}/v1/models", timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Look for our model in the response
+            if "data" in data:
+                for model_entry in data["data"]:
+                    if model_entry.get("id") == self.model_path:
+                        # Check metadata for backend info
+                        metadata_list = model_entry.get("metadata", [])
+                        if metadata_list and len(metadata_list) > 0:
+                            # Get the first server's metadata
+                            server_metadata = metadata_list[0].get("metadata", {})
+                            backend = server_metadata.get("backend")
+                            
+                            if backend in ["vllm", "sglang"]:
+                                return backend
+                            
+            # Fallback: Try to detect by testing endpoints
+            print("Backend not found in metadata, attempting to detect by testing endpoints...")
+            
+            # Test for SGLang (has /health endpoint)
+            try:
+                health_response = requests.get(f"{self.server_url}/health", timeout=5)
+                if health_response.status_code == 200:
+                    return "sglang"
+            except:
+                pass
+            
+            # Default to vllm
+            print("Defaulting to vllm format")
+            return "vllm"
+            
+        except Exception as e:
+            print(f"Warning: Could not auto-detect backend ({e}), defaulting to vllm")
+            return "vllm"
 
     def _check_health(self):
         """Check if the server is healthy."""
@@ -310,11 +365,11 @@ class RemoteReward(Reward):
             raise ConnectionError(f"Server health check failed: {str(e)}")
 
 
-    def _evaluate(self, payload) -> List[float]:
+    def _evaluate(self, payload,use_tqdm=False) -> List[float]:
         """Synchronous wrapper for async evaluation with retries."""
-        return asyncio.run(self._evaluate_async(payload))
-    
-    async def _evaluate_async(self, payload) -> List[float]:
+        return asyncio.run(self._evaluate_async(payload,use_tqdm=use_tqdm))
+
+    async def _evaluate_async(self, payload, use_tqdm=False) -> List[float]:
         """
         Submit texts for evaluation with retry logic.
 
@@ -328,10 +383,22 @@ class RemoteReward(Reward):
             RuntimeError: If all retry attempts fail
             TimeoutError: If evaluation times out
         """
-        async def _make_request_with_retries(p):
-            for attempt in range(self.max_retries):
-                try:
-                    async with aiohttp.ClientSession() as session:
+        from tqdm.asyncio import tqdm as tqdm_asyncio
+
+        # Create ONE session with connection pooling for ALL requests
+        # Since gateway is a single host, set limits based on max_concurrent_requests
+        # Connection reuse means actual connections needed < max_concurrent_requests
+        connector = aiohttp.TCPConnector(
+            limit=self.max_concurrent_requests,  # Total connection pool size
+            limit_per_host=self.max_concurrent_requests,  # Max connections to gateway
+            ttl_dns_cache=600,
+            enable_cleanup_closed=True
+        )
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async def _make_request_with_retries(p):
+                for attempt in range(self.max_retries):
+                    try:
                         async with session.post(
                             f"{self.server_url}/{self.routes['evaluate']}",
                             json=p,
@@ -340,21 +407,46 @@ class RemoteReward(Reward):
                             resp.raise_for_status()
                             data = await resp.json()
                             return data
-                except Exception as e:
-                    if attempt == self.max_retries - 1:
-                        raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
-                    await asyncio.sleep(self.polling_interval)
-        
-        # Create tasks for all requests and run them concurrently
-        tasks = [_make_request_with_retries(p) for p in payload]
-        results = await asyncio.gather(*tasks)
-        
-        if DEBUG:
-            print(results[0])
-        # Extract rewards from results
-        rewards = [self.routes["parse"](result) for result in results ]
-        
-        return rewards
+                    except Exception as e:
+                        if attempt == self.max_retries - 1:
+                            raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
+                        await asyncio.sleep(self.polling_interval)
+
+            # Limit concurrent requests using a semaphore (no batching for-loop)
+            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+
+            async def limited_request(p):
+                async with semaphore:
+                    return await _make_request_with_retries(p)
+
+            tasks = [limited_request(p) for p in payload]
+
+            if use_tqdm:
+                # Use tqdm with gather to preserve order
+                from tqdm import tqdm
+                
+                # Create a wrapper to update progress bar
+                completed_count = [0]
+                pbar = tqdm(total=len(tasks), desc="Evaluating")
+                
+                async def tracked_task(task):
+                    result = await task
+                    completed_count[0] += 1
+                    pbar.update(1)
+                    return result
+                
+                results = await asyncio.gather(*[tracked_task(task) for task in tasks])
+                pbar.close()
+            else:
+                results = await asyncio.gather(*tasks)
+
+            if DEBUG:
+                print(results[0])
+
+            # Extract rewards from results
+            rewards = [self.routes["parse"](result) for result in results]
+
+            return rewards
 
     def evaluate(self, conversations, use_tqdm=False, **kwargs):
         """
@@ -371,7 +463,6 @@ class RemoteReward(Reward):
        
 
         # Use the configured batch size directly
-        temp_batch = self.batch_size
 
         # Create payloads with texts and context
         payloads = [
@@ -399,7 +490,7 @@ class RemoteReward(Reward):
         if DEBUG:   
             print("<rm> payload:",packed_payload[0])
         # Evaluate using the async method (wrapped synchronously)
-        results = self._evaluate(packed_payload)
+        results = self._evaluate(packed_payload,use_tqdm=use_tqdm)
 
         return results
 
@@ -430,7 +521,6 @@ class RewardModel(Reward):
     def __init__(
         self,
         model_path: str,
-        batch_size: int = 32,
         device: int = 0,
         task: str = "text-classification",
         clamp: float = 40,
@@ -438,6 +528,7 @@ class RewardModel(Reward):
         use_flash_attention: bool = True,
         device_count=1,
         max_length: int = 1024,
+        batch_size: int = 32,
     ):
 
         super().__init__(f"rm:{model_path}")

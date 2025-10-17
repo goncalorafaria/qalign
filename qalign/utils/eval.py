@@ -15,19 +15,19 @@ from qalign.utils.ifeval.eval import test_instruction_following_loose
 from qalign.utils.math import get_last_math, get_last_option, get_last_number
 
 ## quest
-from quest.reward.model import ValueHead
-from quest.reward.remote import RemoteReward
-from quest.utils.list import (
+#from qalign.reward import ValueHead
+from qalign.reward import RemoteReward
+from qalign.utils.list import (
     flatten_list,
     unflatten_list,
     get_unique_mapping,
     invert_unique_mapping,
     chunked,
 )
-from quest import (
+from qalign.reward import (
     Reward,
-    RewardModel,
-    ContextualRewardModel,
+    #RewardModel,
+    #ContextualRewardModel,
 )
 
 ## expkit
@@ -62,7 +62,7 @@ def compress_predictions(instances, n=None):
             )
         )
 
-        promptsi = [i["input"]["prompt"]] * len(vcbi)
+        promptsi = [i["input"]["chat_template_prompt"]] * len(vcbi)
 
         prompts.append(promptsi)
         vocabs.append(vcbi)
@@ -212,18 +212,23 @@ class RewardEval(Evalutor):
             prompts, tokens, vocabs, counts = compress_predictions(
                 instance_chunk, n=self.n
             )
-
-            # Set context for this chunk only
-            if isinstance(
-                self.reward,
-                (ContextualRewardModel, ValueHead, RemoteReward),
-            ):
-                self.reward.set_context(context=flatten_list(prompts))
-
-            # Evaluate just this chunk's candidates
+            
+            #  instance_chunk[0]['input']["chat_template_prompt"]
+            
+            # rewards = self.compute_reward(
+            #[ c + [{"role":"assistant", "content":t}] for c,t in zip(conversations,completions_text)],
+            # )#
+            
+            
             chunk_flat_vocabs = flatten_list(vocabs)
+            chunk_flat_prompts = flatten_list(prompts)
+            
+            conversations = [ [c, {"role":"assistant", "content":t}] for c,t in zip(chunk_flat_prompts,chunk_flat_vocabs)]
+            
+            # Evaluate just this chunk's candidates
+            
             chunk_scores = self.reward.evaluate(
-                candidates=chunk_flat_vocabs,
+                conversations=conversations,
                 use_tqdm=True,  # Disable per-chunk progress bars
             )
 

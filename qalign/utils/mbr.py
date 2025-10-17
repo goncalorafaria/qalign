@@ -15,7 +15,7 @@ from scipy.sparse import csr_matrix
 
 ## qalign
 from qalign.utils.math import generate_axis
-from quest.utils.list import (
+from qalign.utils.list import (
     chunked,
 )
 

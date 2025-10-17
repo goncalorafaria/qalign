@@ -231,7 +231,7 @@ def run_quest(
         )
 
         chain_outputs = chain.run_pipelined(
-            prompts=[data["prompt"] for data in data_batch],
+            prompts=[data["chat_template_prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
             workers=4,
@@ -276,7 +276,7 @@ def run_quest_bootstrap(
         )
 
         chain_outputs = chain.run_pipelined(
-            prompts=[data["prompt"] for data in data_batch],
+            prompts=[data["chat_template_prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
             warm_start=[

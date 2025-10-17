@@ -11,7 +11,7 @@ from typing import *
 from transformers import AutoTokenizer
 
 ## quest
-from quest.utils.list import chunked
+from qalign.utils.list import chunked
 
 ## qalign
 from qalign.utils.mbr import mbr_pick_progression, weighted_mbr_pick_progression
