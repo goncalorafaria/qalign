@@ -592,7 +592,7 @@ class QAlign:
 
     def run_pipelined(
         self, 
-        prompts,
+        conversations,
         steps,
         workers=0,
         use_tqdm=False,
@@ -600,7 +600,7 @@ class QAlign:
     ):
         if workers==0:
             return self.run(
-                prompts=prompts,
+                conversations=conversations,
                 steps=steps,
                 use_tqdm=use_tqdm,
                 **kwargs,
@@ -626,7 +626,7 @@ class QAlign:
                     batch_index, data_batch = batch_queue.get(timeout=1)
                     
                     chain_outputs = deepcopy(chain).run(
-                        prompts=data_batch,
+                        conversations=data_batch,
                         steps=steps,
                         use_tqdm=use_tqdm,
                         tqdm_index=thread_id,
@@ -657,7 +657,7 @@ class QAlign:
         
         # Producer: Add batches to queue
         def producer():
-            for i, data_batch in enumerate(prompts):
+            for i, data_batch in enumerate(conversations):
                 batch_queue.put((i, data_batch))
         
         producer_thread = threading.Thread(target=producer)
@@ -665,7 +665,7 @@ class QAlign:
         
         
         # Collector: Process results in order
-        total_batches = len(prompts)
+        total_batches = len(conversations)
         processed_count = 0
         next_expected_index = 0
         

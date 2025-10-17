@@ -209,8 +209,8 @@ def run_quest(
     model,
     steps,
     data_batches,
-    reward_model_batch_size=16,
     reward_url="http://localhost:8080",
+    num_workers=4,
 ):
 
     
@@ -218,7 +218,7 @@ def run_quest(
     reward = RemoteReward(
         server_url=reward_url,
         model_path=experiment.meta["reward_model_path"],
-        batch_size=reward_model_batch_size,
+        max_concurrent_requests=32,
     )
     
     # Process each batch
@@ -231,10 +231,10 @@ def run_quest(
         )
 
         chain_outputs = chain.run_pipelined(
-            prompts=[data["chat_template_prompt"] for data in data_batch],
+            conversations=[ [data["chat_template_prompt"]] for data in data_batch],
             steps=steps,
             use_tqdm=True,
-            workers=4,
+            workers=num_workers,
         )
 
         outputs = chain_outputs.state_path
@@ -305,7 +305,7 @@ def run_experiment(
     experiment,
     model_url="http://localhost:8080",
     reward_url="http://localhost:8080",
-    reward_model_batch_size=16,
+    num_workers=4,
 ):
 
     # Create model
@@ -314,6 +314,7 @@ def run_experiment(
         model_path=experiment.meta["model_path"],
         max_prompt_length=experiment.meta["max_prompt_length"],
         max_new_tokens=experiment.meta["max_new_tokens"],
+        max_concurrent_requests=32,
     )
 
     completed = len(experiment.instances())
@@ -326,7 +327,6 @@ def run_experiment(
                 experiment=experiment,
                 model=model,
                 steps=experiment.meta["steps"],
-                reward_model_batch_size=reward_model_batch_size,
                 reward_url=reward_url,
             )
 
@@ -360,8 +360,8 @@ def run_experiment(
                 model=model,
                 steps=experiment.meta["steps"],
                 data_batches=data_batches,
-                reward_model_batch_size=reward_model_batch_size,
                 reward_url=reward_url,
+                num_workers=num_workers,
             )
 
 

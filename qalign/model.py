@@ -21,6 +21,7 @@ class RemoteVLLM:
         temperature: float = 1.0,
         timeout: float = 300,
         max_retries: int = 15,
+        max_concurrent_requests: int = 256,
     ):
         
         self.server_url = server_url.rstrip("/")
@@ -32,6 +33,7 @@ class RemoteVLLM:
          
         self.timeout = timeout
         self.max_retries = max_retries
+        self.max_concurrent_requests = max_concurrent_requests
 
 
         self.model_path = model_path 
@@ -91,34 +93,80 @@ class RemoteVLLM:
         except Exception as e:
             raise ConnectionError(f"Server health check failed: {str(e)}")
 
-    def _post_with_retries(self, endpoint, payload):
+    def _post_with_retries(self, endpoint, payload, use_tqdm=False):
         """Synchronous wrapper for async POST requests with retries."""
-        return asyncio.run(self._post_with_retries_async(endpoint, payload))
+        return asyncio.run(self._post_with_retries_async(endpoint, payload, use_tqdm=use_tqdm))
     
-    async def _post_with_retries_async(self, endpoint, payload):
-        async def _make_request_with_retries(session, p):
-            for attempt in range(self.max_retries):
-                try:
-                    async with session.post(
-                        f"{self.server_url}{endpoint}",
-                        json=p,
-                        timeout=aiohttp.ClientTimeout(total=self.timeout),
-                    ) as resp:
-                        resp.raise_for_status()
-                        data = await resp.json()
-                        if isinstance(data, dict):
-                            data = [data]
-                        return data
-                except Exception as e:
-                    if attempt == self.max_retries - 1:
-                        raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
-                    await asyncio.sleep(1)
+    async def _post_with_retries_async(self, endpoint, payload, use_tqdm=False):
+        """
+        Submit requests with retry logic and connection pooling.
         
-        # Use a single session for all requests
-        async with aiohttp.ClientSession() as session:
-            # Create tasks for all requests and run them concurrently
-            tasks = [_make_request_with_retries(session, p) for p in payload]
-            results = await asyncio.gather(*tasks)
+        Args:
+            endpoint: API endpoint to call
+            payload: List of payloads to send
+            use_tqdm: Whether to show progress bar
+            
+        Returns:
+            List of responses
+            
+        Raises:
+            RuntimeError: If all retry attempts fail
+        """
+        # Create ONE session with connection pooling for ALL requests
+        # Since server is a single host, set limits based on max_concurrent_requests
+        # Connection reuse means actual connections needed < max_concurrent_requests
+        connector = aiohttp.TCPConnector(
+            limit=self.max_concurrent_requests,  # Total connection pool size
+            limit_per_host=self.max_concurrent_requests,  # Max connections to server
+            ttl_dns_cache=600,
+            enable_cleanup_closed=True
+        )
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async def _make_request_with_retries(p):
+                for attempt in range(self.max_retries):
+                    try:
+                        async with session.post(
+                            f"{self.server_url}{endpoint}",
+                            json=p,
+                            timeout=aiohttp.ClientTimeout(total=self.timeout),
+                        ) as resp:
+                            resp.raise_for_status()
+                            data = await resp.json()
+                            if isinstance(data, dict):
+                                data = [data]
+                            return data
+                    except Exception as e:
+                        if attempt == self.max_retries - 1:
+                            raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
+                        await asyncio.sleep(1)
+            
+            # Limit concurrent requests using a semaphore
+            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+            
+            async def limited_request(p):
+                async with semaphore:
+                    return await _make_request_with_retries(p)
+            
+            tasks = [limited_request(p) for p in payload]
+            
+            if use_tqdm:
+                from tqdm import tqdm
+                
+                # Create a wrapper to update progress bar
+                completed_count = [0]
+                pbar = tqdm(total=len(tasks), desc="Processing")
+                
+                async def tracked_task(task):
+                    result = await task
+                    completed_count[0] += 1
+                    pbar.update(1)
+                    return result
+                
+                results = await asyncio.gather(*[tracked_task(task) for task in tasks])
+                pbar.close()
+            else:
+                results = await asyncio.gather(*tasks)
         
         # Flatten results
         flattened_results = []
@@ -165,7 +213,7 @@ class RemoteVLLM:
         return request.json()
     
     
-    def continuation(self, prompt, prefix=None):
+    def continuation(self, prompt, prefix=None, use_tqdm=False):
         if prefix is None:
             input_data = prompt
         else:
@@ -204,7 +252,7 @@ class RemoteVLLM:
         if DEBUG:
             print("model_packet:",payload[0])
 
-        results = self._post_with_retries("/v1/completions", payload)
+        results = self._post_with_retries("/v1/completions", payload, use_tqdm=use_tqdm)
 
         completions = [
             choice["text"] 
@@ -221,6 +269,7 @@ class RemoteVLLM:
         self,
         input_data,
         n: int = 1,
+        use_tqdm=False,
     ):
         prompts = []
         for prompt in input_data: 
@@ -238,7 +287,7 @@ class RemoteVLLM:
             for p in prompts
         ]
 
-        results = self._post_with_retries("/v1/completions", payload)
+        results = self._post_with_retries("/v1/completions", payload, use_tqdm=use_tqdm)
 
         completions = [
             choice["text"] for result in results for choice in result.get("choices", [])

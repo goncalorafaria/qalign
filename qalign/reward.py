@@ -461,7 +461,7 @@ class RemoteReward(Reward):
             List of reward scores
         """
        
-
+        
         # Use the configured batch size directly
 
         # Create payloads with texts and context
@@ -486,6 +486,8 @@ class RemoteReward(Reward):
             }
             for p in payloads
         ]
+        
+        
 
         if DEBUG:   
             print("<rm> payload:",packed_payload[0])
