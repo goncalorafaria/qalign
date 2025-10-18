@@ -14,9 +14,8 @@ class RemoteVLLM:
         self,
         server_url: str,
         model_path: str,
-       
-        max_new_tokens: int = 1000,
-        max_prompt_length: int = 1000,
+        max_new_tokens: int = 1024,
+        max_prompt_length: int = 1024*3,
         stop_tokens: list = None,
         temperature: float = 1.0,
         timeout: float = 300,
@@ -58,7 +57,6 @@ class RemoteVLLM:
 
 
     def encode(self, prompt_txt):
-
         tokens = self.tokenize(prompt_txt)
         return tokens
 

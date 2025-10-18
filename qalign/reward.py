@@ -475,6 +475,8 @@ class RemoteReward(Reward):
           } for t in conversations
         ]
         
+        
+        
         if DEBUG:
             print("<rm> texts:",repr(payloads[0])) 
             

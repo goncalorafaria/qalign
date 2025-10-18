@@ -502,7 +502,6 @@ class QAlign:
         
         
         self.state_path = []
-        
 
 
         self.steps = steps
@@ -570,11 +569,7 @@ class QAlign:
                 proposal_state,
                 accept.tolist(),
                 A.tolist(),
-            )
-
-             
-
-         
+            )         
         
         outputs=process_batch_outputs(self.state_path, len(prompts))
         dupped_outputs= [ {"input":ind, "outputs": repeat_on_reject(output)} for ind,output in zip(prompts,outputs)]
@@ -596,6 +591,7 @@ class QAlign:
         steps,
         workers=0,
         use_tqdm=False,
+        batch_size=16,
         **kwargs,
     ):
         if workers==0:
@@ -617,14 +613,18 @@ class QAlign:
         
         chain = self
         
+        print(f"Conversations: {len(conversations)}")
+        #print(conversations[0])
         def worker_thread(thread_id):
-        
             """Worker thread that processes batches"""
             while not stop_event.is_set():
                 try:
                     # Get batch from queue with timeout
                     batch_index, data_batch = batch_queue.get(timeout=1)
                     
+                    
+                    print(f"Processing batch {batch_index} with {len(data_batch)} conversations - {thread_id}")
+                    #print(data_batch[0])
                     chain_outputs = deepcopy(chain).run(
                         conversations=data_batch,
                         steps=steps,
@@ -657,8 +657,13 @@ class QAlign:
         
         # Producer: Add batches to queue
         def producer():
-            for i, data_batch in enumerate(conversations):
-                batch_queue.put((i, data_batch))
+            ## break in to batches of 16
+            
+            for i in range(0, len(conversations), batch_size):
+                batch_queue.put((i, conversations[i:i+batch_size]))
+            
+            #for i, data_batch in enumerate(conversations):
+            #    batch_queue.put((i, data_batch))
         
         producer_thread = threading.Thread(target=producer)
         producer_thread.start()

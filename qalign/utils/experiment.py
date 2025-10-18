@@ -213,31 +213,31 @@ def run_quest(
     num_workers=4,
 ):
 
-    
-
     reward = RemoteReward(
         server_url=reward_url,
         model_path=experiment.meta["reward_model_path"],
-        max_concurrent_requests=32,
+        max_concurrent_requests=64,
     )
     
+    chain = QAlign(
+        model=model,
+        reward=reward,
+        beta=experiment.meta["beta"],
+    )
+
     # Process each batch
     for data_batch in data_batches:
  
-        chain = QAlign(
-            model=model,
-            reward=reward,
-            beta=experiment.meta["beta"],
-        )
-
         chain_outputs = chain.run_pipelined(
-            conversations=[ [data["chat_template_prompt"]] for data in data_batch],
+            conversations=[ data["chat_template_prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
             workers=num_workers,
+            batch_size=32,
         )
 
-        outputs = chain_outputs.state_path
+        # Extract outputs from list of tuples returned by run_pipelined
+        outputs = [output for _, output in chain_outputs]
         experiment.add_instances(
             inputs=data_batch,
             outputs=outputs,
@@ -254,7 +254,6 @@ def run_quest_bootstrap(
     experiment,
     model,
     steps,
-    reward_model_batch_size=16,
     reward_url="http://localhost:8080",
 ):
 
@@ -262,7 +261,6 @@ def run_quest_bootstrap(
     reward = RemoteReward(
         server_url=reward_url,
         model_path=experiment.meta["reward_model_path"],
-        batch_size=reward_model_batch_size,
     )
     
     for data_batch in chunked(
