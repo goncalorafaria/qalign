@@ -28,15 +28,16 @@ exp=setup["58ee72f5-e0e4-47a3-8aee-8209a2ab5f86"]
 
 print(exp)
 j=0
+T=15
 for i in exp.instances(lazy_iterable=True):
     question = i["input"]["chat_template_prompt"][0]["content"]
     answer = i["input"]["answer"]
     j+=1
-    if j < 10:
+    if j < T:
         continue
     
     callback = AsyncAnimateLLMResponsesCallback(
-        prompt=question + answer ,
+        prompt=question,# + answer ,
         total_steps=exp.meta["steps"],
     )
     
@@ -55,7 +56,7 @@ for i in exp.instances(lazy_iterable=True):
             options_str = "[Options: " + ", ".join([f"{k}: {v}" for k, v in options.items()]) + "]"
             callback.add_extra_text(options_str)
             callback.add_response(response)
-            time.sleep(0.2)
+            time.sleep(0.1)
           
             
              

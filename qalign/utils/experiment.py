@@ -211,12 +211,13 @@ def run_quest(
     data_batches,
     reward_url="http://localhost:8080",
     num_workers=4,
+    batch_size=32,
 ):
 
     reward = RemoteReward(
         server_url=reward_url,
         model_path=experiment.meta["reward_model_path"],
-        max_concurrent_requests=64,
+        max_concurrent_requests=batch_size,
     )
     
     chain = QAlign(
@@ -233,7 +234,7 @@ def run_quest(
             steps=steps,
             use_tqdm=True,
             workers=num_workers,
-            batch_size=32,
+            batch_size=batch_size,
         )
 
         # Extract outputs from list of tuples returned by run_pipelined

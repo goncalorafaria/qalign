@@ -91,7 +91,7 @@ class AsyncAnimateLLMResponsesCallback:
     
     def __enter__(self):
         """Start the live display"""
-        self.live = Live(console=self.console, refresh_per_second=10)
+        self.live = Live(console=self.console, refresh_per_second=10, vertical_overflow="visible")
         self.live.start()
         return self
     
@@ -105,7 +105,8 @@ class AsyncAnimateLLMResponsesCallback:
     def _update_separators(self):
         """Update separator lengths based on current terminal size"""
         try:
-            terminal_width = shutil.get_terminal_size().columns
+            # Use console.width to match text wrapping width
+            terminal_width = self.console.width
         except:
             terminal_width = 80
         self.separator = "=" * terminal_width
@@ -125,29 +126,33 @@ class AsyncAnimateLLMResponsesCallback:
     def add_response(self, response_text):
         """Add a new response with optional async delay"""
         self.step_count += 1
+        # Update separators to fit current terminal size
+        self._update_separators()
         # Create header
         
         if self.total_steps is not None:
             
-            progress= f"(Step {self.step_count}/{self.total_steps})"
+            progress = Text(f"(Step {self.step_count}/{self.total_steps})", style=self.change_color)
             
-            # Calculate progress bar
+            # Calculate progress bar with proper width
+            # Use same width as separators to maintain consistency
+            progress_bar_width = len(self.dash_separator)
             progress_ratio = self.step_count / self.total_steps
-            filled_length = int(progress_ratio * len(self.dash_separator))
-            unfilled_length = len(self.dash_separator) - filled_length
+            filled_length = int(progress_ratio * progress_bar_width)
+            unfilled_length = progress_bar_width - filled_length
             
             # Create progress bar: filled portion with "=", unfilled with "-"
-            
+            # Keep both bold red to match edits, Rich will handle wrapping
             if filled_length > 0:
-                progress_bar = Text("=" * (filled_length-1) + "|",style=self.change_color) + Text("-" * unfilled_length+"\n", style=self.prompt_color)
+                progress_bar = Text("=" * (filled_length-1) + "|", style=self.change_color) + Text("-" * unfilled_length+"\n", style=self.prompt_color)
             else:
-                progress_bar = Text(self.dash_separator+"\n", style=self.prompt_color)
+                progress_bar = Text("-" * progress_bar_width + "\n", style=self.prompt_color)
             
         else:
-            progress= f"(Step {self.step_count})"
-            progress_bar = self.dash_separator
+            progress = Text(f"(Step {self.step_count})", style=self.change_color)
+            progress_bar = Text(self.dash_separator + "\n", style=self.prompt_color)
         
-        header = Text(f"{self.separator}\nPrompt: {self.prompt}\n{progress}\n", style=self.prompt_color)+progress_bar
+        header = Text(f"{self.separator}\nPrompt: {self.prompt}\n", style=self.prompt_color) + progress + Text("\n", style=self.prompt_color) + progress_bar
             
         if response_text != self.previous_text:
             
