@@ -75,6 +75,23 @@ class RemoteVLLM:
     def decode_tokenize(self, ids): 
         return self.tokenizer.batch_decode(ids, skip_special_tokens=False, spaces_between_special_tokens=False)
 
+    def _truncate_tokens(self, tokenized_input):
+        """
+        Truncate tokenized input if it exceeds max_prompt_length.
+        Keeps the end of the sequence (most recent tokens).
+        
+        Args:
+            tokenized_input: List of token IDs
+            
+        Returns:
+            Truncated list of token IDs
+        """
+        if len(tokenized_input) <= self.max_prompt_length:
+            return tokenized_input
+        
+        # Truncate from the beginning, keeping the end
+        return tokenized_input[-self.max_prompt_length:]
+
     def _check_health(self):
         url = f"{self.server_url}/v1/models"
         try:
@@ -216,14 +233,9 @@ class RemoteVLLM:
             input_data = prompt
         else:
             input_data = [x[0] + x[1] for x in zip(prompt, prefix)]
-            ninput = []
-            for x in input_data:
-                nx = len(x)
-                if nx > self.max_prompt_length:
-                    ninput.append(x[:self.max_prompt_length])
-                else:
-                    ninput.append(x)
-            input_data = ninput
+        
+        # Truncate all inputs to max_prompt_length
+        input_data = [self._truncate_tokens(x) for x in input_data]
 
         #prompt_text = self.decode_tokenize(
         #    input_data, skip_special_tokens=True, spaces_between_special_tokens=False
@@ -269,8 +281,15 @@ class RemoteVLLM:
         n: int = 1,
         use_tqdm=False,
     ):
+        # Truncate input_data (text) by tokenizing, truncating, then decoding
+        tokenized_data = []
+        for prompt in input_data:
+            tokens = self.tokenizer.encode(prompt, max_length=self.max_prompt_length, truncation=True)
+            truncated_prompt = self.tokenizer.decode(tokens, skip_special_tokens=False)
+            tokenized_data.append(truncated_prompt)
+        
         prompts = []
-        for prompt in input_data: 
+        for prompt in tokenized_data: 
             prompts.extend([prompt] * n)
 
         payload = [
