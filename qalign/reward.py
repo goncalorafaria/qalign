@@ -22,7 +22,9 @@ from transformers import AutoModelForSequenceClassification
 import torch
 from typing import Dict
 from torch import nn
-
+import requests
+from tqdm import tqdm
+from tqdm.asyncio import tqdm as tqdm_asyncio
 
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 class Reward:
@@ -247,6 +249,7 @@ class RemoteReward(Reward):
         #batch_size=64, 
         server_format: str = None,  # Auto-detect if None
         max_concurrent_requests: int = 256,
+        max_prompt_length: int = 2048,  # Maximum prompt size to prevent server-side failures
     ):
         """
         Client for interacting with the Reward Model Server.
@@ -259,6 +262,7 @@ class RemoteReward(Reward):
             timeout: Maximum time to wait for result in seconds
             server_format: Backend format ("vllm", "sglang", "legacy"). Auto-detected if None.
             max_concurrent_requests: Maximum concurrent requests
+            max_prompt_length: Maximum prompt length in tokens (will truncate if exceeded)
         """
 
         super().__init__(f"rm:{model_path}")
@@ -269,6 +273,7 @@ class RemoteReward(Reward):
         self.polling_interval = polling_interval
         self.timeout = timeout
         self.model_path = model_path 
+        self.max_prompt_length = max_prompt_length
         #self.batch_size = batch_size
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         
@@ -311,7 +316,7 @@ class RemoteReward(Reward):
         Returns:
             str: Backend type ("vllm", "sglang", or "legacy")
         """
-        import requests
+        
         
         try:
             # Query the gateway's v1/models endpoint
@@ -383,7 +388,7 @@ class RemoteReward(Reward):
             RuntimeError: If all retry attempts fail
             TimeoutError: If evaluation times out
         """
-        from tqdm.asyncio import tqdm as tqdm_asyncio
+       
 
         # Create ONE session with connection pooling for ALL requests
         # Since gateway is a single host, set limits based on max_concurrent_requests
@@ -423,7 +428,7 @@ class RemoteReward(Reward):
 
             if use_tqdm:
                 # Use tqdm with gather to preserve order
-                from tqdm import tqdm
+                
                 
                 # Create a wrapper to update progress bar
                 completed_count = [0]
@@ -448,12 +453,60 @@ class RemoteReward(Reward):
 
             return rewards
 
+    def _truncate_conversation(self, conversation):
+        """
+        Truncate the last message's content by removing tokens from the end to fit within max_prompt_length.
+        Only works with the response (last element) of the conversation.
+        
+        Args:
+            conversation: List of dict with "role" and "content" keys
+            
+        Returns:
+            Truncated conversation
+        """
+        # Check total length
+        full_text = self.tokenizer.apply_chat_template(
+            conversation,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        
+        tokens = self.tokenizer.encode(full_text)
+        
+        # If within limit, return as is
+        if len(tokens) <= self.max_prompt_length:
+            return conversation
+        
+        # Calculate excess tokens
+        excess_tokens = len(tokens) - self.max_prompt_length
+        
+        # Get the last message (response)
+        if len(conversation) == 0:
+            return conversation
+            
+        last_message = conversation[-1].copy()
+        content = last_message.get("content", "")
+        
+        # Tokenize only the response content
+        content_tokens = self.tokenizer.encode(content)
+        
+        # If response is large enough to truncate, remove excess tokens from the end
+        if len(content_tokens) > excess_tokens:
+            truncated_content_tokens = content_tokens[:-excess_tokens]
+            last_message["content"] = self.tokenizer.decode(truncated_content_tokens, skip_special_tokens=True)
+        else:
+            # If the response is smaller than excess, just empty it
+            last_message["content"] = ""
+        
+        # Return conversation with truncated response
+        return conversation[:-1] + [last_message]
+
     def evaluate(self, conversations, use_tqdm=False, **kwargs):
         """
         Evaluate candidates using the reward model.
 
         Args:
-            candidates: List of candidate texts to evaluate
+            conversations: List of conversations to evaluate
             use_tqdm: Whether to use progress bar (not implemented yet)
             **kwargs: Additional keyword arguments
 
@@ -462,8 +515,9 @@ class RemoteReward(Reward):
         """
        
         
-        # Use the configured batch size directly
-
+        # Truncate conversations that are too long
+        truncated_conversations = [self._truncate_conversation(conv) for conv in conversations]
+        
         # Create payloads with texts and context
         payloads = [
             {"input": 
@@ -472,7 +526,7 @@ class RemoteReward(Reward):
                 tokenize=False,
                 add_generation_prompt=False,
                 )
-          } for t in conversations
+          } for t in truncated_conversations
         ]
         
         
@@ -548,10 +602,7 @@ class RewardModel(Reward):
         self.clamp = clamp
         self.max_length = max_length
 
-        from transformers import (
-            AutoTokenizer,
-            AutoModelForSequenceClassification,
-        )
+       
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,

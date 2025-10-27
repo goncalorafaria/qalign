@@ -15,8 +15,8 @@ import torch
 
 
 reward = RemoteReward(
-    server_url="http://localhost:8038",
-    model_path='Skywork/Skywork-Reward-Llama-3.1-8B-v0.2',
+    server_url="http://localhost:8080",
+    model_path='graf/q4-223d83d04db5ef64-1-30-8b-m',
     server_format="sglang",
 )
 
@@ -28,7 +28,7 @@ t = [{"role": "user", "content": question}]
 
 result = reward.evaluate([t])
 
-import pdb; pdb.set_trace()
+print("Result: ", result)
 
 # skywork
 # -5.65625
