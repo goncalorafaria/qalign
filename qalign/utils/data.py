@@ -1,6 +1,6 @@
 from datasets import load_dataset, Value
 
-from langchain.prompts import PromptTemplate
+#from langchain.prompts import PromptTemplate
 
 from functools import partial
 
@@ -9,8 +9,8 @@ from transformers import AutoTokenizer
 import numpy as np
 from datasets import Dataset
 
-DEFAULT_USER_PROMPT = PromptTemplate.from_template("Question: {content}\n")
-DEFAULT_AI_PROMPT = PromptTemplate.from_template("Answer: {content}\n")
+#DEFAULT_USER_PROMPT = PromptTemplate.from_template("Question: {content}\n")
+#DEFAULT_AI_PROMPT = PromptTemplate.from_template("Answer: {content}\n")
 
 ## qalign
 from qalign.utils.examples import MATH_EXAMPLARS, GSM8K_EXEMPLARS
@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 ## quest
 
-DEFAULT_TEMPLATE = PromptTemplate.from_template("{prompt}")
+#DEFAULT_TEMPLATE = PromptTemplate.from_template("{prompt}")
 
 class FlexiblePromptTemplate:
     def __init__(self, template):
@@ -38,6 +38,11 @@ class FlexiblePromptTemplate:
             if placeholder in result:
                 result = result.replace(placeholder, str(value))
         return result
+
+
+DEFAULT_USER_PROMPT = FlexiblePromptTemplate("Question: {content}\n")
+DEFAULT_AI_PROMPT = FlexiblePromptTemplate("Answer: {content}\n")
+DEFAULT_TEMPLATE = FlexiblePromptTemplate("{prompt}")
 
 
 def parsehh_to_template(
@@ -96,8 +101,8 @@ def general_process_data_chat(
 def general_process_data_prompt(
     chat_template_prompt,
     tokenizer,
-    user_prompt=DEFAULT_USER_PROMPT,
-    ai_prompt=DEFAULT_AI_PROMPT,
+    user_prompt,
+    ai_prompt,
     **extra_data,
 ):
     concatenated_prompt = tokenizer.bos_token
