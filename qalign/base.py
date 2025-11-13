@@ -15,7 +15,7 @@ import queue
 import threading
 from copy import deepcopy
 import os
-from qalign.utils.timing import timing_decorator
+from qalign.utils.timing import timing_decorator, TimingStats
 from qalign.utils.list import join_accepted_values, process_batch_outputs, repeat_on_reject
 from qalign.utils.math import sample_index, log_prob_index
 
@@ -117,6 +117,9 @@ class QAlign:
         self.beta = beta
         self.logratio_clamp = logratio_clamp
         self.steps = 0
+        
+        # Initialize timing statistics
+        self.timing_stats = TimingStats()
 
     @timing_decorator('compute_reward')
     def compute_reward(
@@ -380,6 +383,7 @@ class QAlign:
 
         return state
 
+    @timing_decorator('start_chain')
     def start_chain(self, prompt, conversations, warm_start=None) -> State:
         """
         Start the Markov chain with an initial state.
@@ -724,27 +728,19 @@ class QAlign:
     
     def print_timing_stats(self):
         """
-        Print timing statistics for compute_reward and transition operations.
-        Only prints if DEBUG is True.
+        Print timing statistics for all recorded operations.
         """
-            
-        compute_reward_count = getattr(self, 'compute_reward_count', 0)
-        transition_count = getattr(self, 'transition_count', 0)
+        if not self.timing_stats.operations:
+            print("No timing statistics recorded.")
+            return
         
-        if compute_reward_count > 0:
-            compute_reward_running_mean = getattr(self, 'compute_reward_running_mean', 0.0)
-            print(f"\n=== Compute Reward Timing Statistics ===")
-            print(f"Total calls: {compute_reward_count}")
-            print(f"Running average time: {compute_reward_running_mean:.6f} seconds")
+        for operation, stats in sorted(self.timing_stats.operations.items()):
+            print(f"\n=== {operation.replace('_', ' ').title()} Timing Statistics ===")
+            print(f"Total calls: {stats['count']}")
+            print(f"Average time: {stats['mean']:.6f} seconds")
+            print(f"Total time: {stats['total']:.6f} seconds")
         
-        if transition_count > 0:
-            transition_running_mean = getattr(self, 'transition_running_mean', 0.0)
-            print(f"\n=== Transition Timing Statistics ===")
-            print(f"Total calls: {transition_count}")
-            print(f"Running average time: {transition_running_mean:.6f} seconds")
-        
-        if compute_reward_count > 0 or transition_count > 0:
-            print("=" * 50)
+        print("=" * 50)
             
             
     def __str__(self):
