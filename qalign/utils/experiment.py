@@ -305,6 +305,8 @@ def run_experiment(
     model_url="http://localhost:8080",
     reward_url="http://localhost:8080",
     num_workers=4,
+    max_concurrent_requests=64,
+    batch_size=64,
 ):
 
     # Create model
@@ -313,7 +315,7 @@ def run_experiment(
         model_path=experiment.meta["model_path"],
         max_prompt_length=experiment.meta["max_prompt_length"],
         max_new_tokens=experiment.meta["max_new_tokens"],
-        max_concurrent_requests=32,
+        max_concurrent_requests=batch_size,
     )
 
     completed = len(experiment.instances())
@@ -337,7 +339,7 @@ def run_experiment(
             dataset_path=experiment.meta["dataset"],
             split=experiment.meta["split"],
             n=experiment.meta["n"],
-            batch_size=experiment.meta.get("batch_size", 64),
+            batch_size=batch_size,
             prompt_template=experiment.meta["prompt_template"],
             start_index=experiment.meta.get("i", 0),
             num_chains=experiment.meta.get("num_chains", 1),

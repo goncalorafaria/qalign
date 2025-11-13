@@ -662,9 +662,10 @@ class QAlign:
         # Producer: Add batches to queue
         def producer():
             ## break in to batches of 16
-            
+            batch_idx = 0
             for i in range(0, len(conversations), batch_size):
-                batch_queue.put((i, conversations[i:i+batch_size]))
+                batch_queue.put((batch_idx, conversations[i:i+batch_size]))
+                batch_idx += 1
             
             #for i, data_batch in enumerate(conversations):
             #    batch_queue.put((i, data_batch))
@@ -674,7 +675,7 @@ class QAlign:
         
         
         # Collector: Process results in order
-        total_batches = len(conversations)
+        total_batches = (len(conversations) + batch_size - 1) // batch_size  # Calculate number of batches
         processed_count = 0
         next_expected_index = 0
         
