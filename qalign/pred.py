@@ -45,6 +45,10 @@ def main(
         .query(query_args)
         .filter(lambda x: x.has_data())
     )
+    
+    print(
+        (query_args, extract, strategy)
+    )
 
     print(setup)
     # setup.experiments[0].evals()
@@ -82,8 +86,8 @@ def main(
                 # print(len(experiment.instances()))
                 return (
                     pick(experiment)
-                    # if not experiment.has_eval(pick.eval_name)
-                    # else experiment
+                    if not experiment.has_eval(pick.eval_name)
+                    else experiment
                 )
                 # else:
                 #    return experiment

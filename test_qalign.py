@@ -9,16 +9,16 @@ from qalign.model import RemoteVLLM
 from qalign.base import QAlign
 
 model = RemoteVLLM(
-    server_url="http://g3054.hyak.local:8000",
-    model_path="meta-llama/Llama-3.1-8B-Instruct",
-    max_prompt_length=100,
-    max_new_tokens=50,
+    server_url="http://klone-login01.hyak.local:8080",
+    model_path="Qwen/Qwen3-4B-Instruct-2507",
+    max_prompt_length=4000,
+    max_new_tokens=4096,
 )
 
 reward = RemoteReward(
-    server_url="http://g3045.hyak.local:8000",
-    model_path='Skywork/Skywork-Reward-Llama-3.1-8B-v0.2',
-    server_format="vllm",
+    server_url="http://klone-login01.hyak.local:8080",
+    model_path='Qwen/Qwen2.5-Math-RM-72B',
+    server_format="sglang",
 )
 
 chain = QAlign(

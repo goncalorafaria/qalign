@@ -599,12 +599,14 @@ class QAlign:
         **kwargs,
     ):
         if workers==0:
-            return self.run(
+            outputs = self.run(
                 conversations=conversations,
                 steps=steps,
                 use_tqdm=use_tqdm,
                 **kwargs,
-            ).texts
+            )
+            
+            return list(zip(conversations, outputs.state_path))
         
         batch_queue = queue.Queue(maxsize=workers)  # Limit queue size to control memory
         result_queue = queue.PriorityQueue() 

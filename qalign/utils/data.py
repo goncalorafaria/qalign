@@ -7,7 +7,7 @@ from functools import partial
 from transformers import AutoTokenizer
 
 import numpy as np
-from datasets import Dataset
+from datasets import Dataset as HFDataset
 
 #DEFAULT_USER_PROMPT = PromptTemplate.from_template("Question: {content}\n")
 #DEFAULT_AI_PROMPT = PromptTemplate.from_template("Answer: {content}\n")
@@ -269,6 +269,65 @@ def processdeepmath_data(
         tokenizer=tokenizer,
         answer=entry["r1_solution_1"],  # answer,
     )
+    
+    
+def processdeepscaler_data(
+    entry, tokenizer, prompt_template, format="chat",  **kwargs
+):
+  
+    math_messages = []
+
+    chat_template = math_messages + [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=entry["problem"]),
+        },
+        {
+            "role": "assistant",
+            "content": entry["solution"],
+        },
+    ]
+
+    # Get the final answer for evaluation
+    # answer = get_last_math(chat_template[-1]["content"])
+    # if answer is None:
+    #    return None
+
+    return general_process_data(
+        chat_template_prompt=chat_template[:-1],
+        format=format,
+        tokenizer=tokenizer,
+        answer=entry["solution"],  # answer,
+    )
+
+def processaime25_data(
+    entry, tokenizer, prompt_template, format="chat",  **kwargs
+):
+
+    math_messages = []
+
+    chat_template = math_messages + [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=entry["problem"]),
+        },
+        {
+            "role": "assistant",
+            "content": entry["answer"],
+        },
+    ]
+
+    # Get the final answer for evaluation
+    # answer = get_last_math(chat_template[-1]["content"])
+    # if answer is None:
+    #    return None
+
+    return general_process_data(
+        chat_template_prompt=chat_template[:-1],
+        format=format,
+        tokenizer=tokenizer,
+        answer=entry["answer"],  # answer,
+    )
 
 
 def processalpaca_data(
@@ -461,7 +520,7 @@ def process_all_redux_data():
         dsi = load_dataset("edinburgh-dawg/mmlu-redux", subject, split="test")
         ds.extend([{"subject": subject, **x} for x in dsi])
 
-    dataset = Dataset.from_list(ds)
+    dataset = HFDataset.from_list(ds)
 
     return dataset
 
@@ -504,6 +563,17 @@ SUPPORTED_DATASETS = {
         processdeepmath_data,
         "zwhe99/DeepMath-103K",
     ),
+     "agentica-org/DeepScaleR-Preview-Dataset": (
+        {},
+        processdeepscaler_data,
+        "agentica-org/DeepScaleR-Preview-Dataset",
+    ),
+     "math-ai/aime25": (
+        {},
+        processaime25_data,
+        "math-ai/aime25",
+    ),
+     #processdeepscaler_data
     # eval
     # "tatsu-lab/alpaca_eval", "alpaca_eval")["eval"]
     # processifeval_data

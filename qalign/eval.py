@@ -62,8 +62,8 @@ def main(
         try:
             return (
                 ps_eval(experiment)
-                # if not experiment.has_eval(ps_eval.eval_name)
-                # else experiment
+                if not experiment.has_eval(ps_eval.eval_name)
+                else experiment
             )
         except FileNotFoundError:
             return experiment

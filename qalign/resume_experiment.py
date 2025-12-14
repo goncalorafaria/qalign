@@ -12,6 +12,7 @@ def main(
     save_path: str = "llama3.2-outputs/",
     model_url: str = "http://localhost:8080",
     reward_url: str = "http://localhost:8080",
+    batch_size: int = 128,
 ):
 
     storage = DiskStorage(save_path, "rw")
@@ -23,6 +24,7 @@ def main(
             experiment=experiment,
             model_url=model_url,
             reward_url=reward_url,
+            batch_size=batch_size,
         )
 
     else:

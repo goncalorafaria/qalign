@@ -4,10 +4,14 @@ import aiohttp
 import asyncio
 import time
 import os
+import logging
+import threading
 from qalign.utils.list import unflatten_list
+from qalign.shared_session import get_shared_session
 
 ## get env variable DEBUG
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+logger = logging.getLogger(__name__)
 
 class RemoteVLLM:
     def __init__(
@@ -54,7 +58,8 @@ class RemoteVLLM:
             self.tokenizer.pad_token_id = self.tokenizer.bos_token_id
             self.tokenizer.pad_token = self.tokenizer.bos_token
         
-
+        # Don't cache session on instance - let shared session manager handle it per event loop
+        # Each asyncio.run() creates a new event loop, so instance-level caching doesn't work
 
     def encode(self, prompt_txt):
         tokens = self.tokenize(prompt_txt)
@@ -110,6 +115,8 @@ class RemoteVLLM:
 
     def _post_with_retries(self, endpoint, payload, use_tqdm=False):
         """Synchronous wrapper for async POST requests with retries."""
+        # Each asyncio.run() creates a new event loop, so we can't share sessions
+        # across calls. The async method will create a session for this call.
         return asyncio.run(self._post_with_retries_async(endpoint, payload, use_tqdm=use_tqdm))
     
     async def _post_with_retries_async(self, endpoint, payload, use_tqdm=False):
@@ -127,62 +134,84 @@ class RemoteVLLM:
         Raises:
             RuntimeError: If all retry attempts fail
         """
-        # Create ONE session with connection pooling for ALL requests
-        # Since server is a single host, set limits based on max_concurrent_requests
-        # Connection reuse means actual connections needed < max_concurrent_requests
-        connector = aiohttp.TCPConnector(
-            limit=self.max_concurrent_requests,  # Total connection pool size
-            limit_per_host=self.max_concurrent_requests,  # Max connections to server
-            ttl_dns_cache=600,
-            enable_cleanup_closed=True
-        )
+        # Get shared session for current event loop - shared session manager handles caching
+        # Don't cache on instance since each asyncio.run() creates a new event loop
+        session = await get_shared_session()
+        if session is None or session.closed:
+            raise RuntimeError(
+                "Shared session not available. "
+                "This should not happen - session should auto-initialize."
+            )
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async def _make_request_with_retries(p):
-                for attempt in range(self.max_retries):
-                    try:
-                        async with session.post(
-                            f"{self.server_url}{endpoint}",
-                            json=p,
-                            timeout=aiohttp.ClientTimeout(total=self.timeout),
-                        ) as resp:
-                            resp.raise_for_status()
-                            data = await resp.json()
-                            if isinstance(data, dict):
-                                data = [data]
-                            return data
-                    except Exception as e:
-                        if attempt == self.max_retries - 1:
-                            raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
-                        await asyncio.sleep(1)
-            
-            # Limit concurrent requests using a semaphore
-            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
-            
-            async def limited_request(p):
-                async with semaphore:
-                    return await _make_request_with_retries(p)
-            
-            tasks = [limited_request(p) for p in payload]
-            
-            if use_tqdm:
-                from tqdm import tqdm
-                
-                # Create a wrapper to update progress bar
-                completed_count = [0]
-                pbar = tqdm(total=len(tasks), desc="Processing")
-                
-                async def tracked_task(task):
-                    result = await task
-                    completed_count[0] += 1
-                    pbar.update(1)
-                    return result
-                
-                results = await asyncio.gather(*[tracked_task(task) for task in tasks])
-                pbar.close()
-            else:
-                results = await asyncio.gather(*tasks)
+        async def _make_request_with_retries(p):
+            for attempt in range(self.max_retries):
+                try:
+                    # Get shared session - it's cached per event loop by the manager
+                    # No need to cache on instance since we're in the same event loop
+                    current_session = await get_shared_session()
+                    if current_session is None or current_session.closed:
+                        raise RuntimeError(
+                            "Shared session not available. "
+                            "This should not happen - session should auto-initialize."
+                        )
+                    
+                    async with current_session.post(
+                        f"{self.server_url}{endpoint}",
+                        json=p,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                        if isinstance(data, dict):
+                            data = [data]
+                        return data
+                except Exception as e:
+                    # Log connection errors to identify contention issues
+                    error_str = str(e).lower()
+                    if "connection" in error_str or "timeout" in error_str or "refused" in error_str:
+                        logger.warning(
+                            f"Connection error on attempt {attempt + 1}/{self.max_retries}: {e} "
+                            f"(thread {threading.current_thread().ident})"
+                        )
+                    elif "session is closed" in error_str or ("closed" in error_str and "session" in error_str):
+                        logger.warning(
+                            f"Session closed during request, will be recreated on next attempt. "
+                            f"Attempt: {attempt + 1}/{self.max_retries}"
+                        )
+                    else:
+                        logger.debug(f"Request error on attempt {attempt + 1}/{self.max_retries}: {e}")
+                    
+                    if attempt == self.max_retries - 1:
+                        raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
+                    await asyncio.sleep(1)
         
+        # Limit concurrent requests using a semaphore
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        
+        async def limited_request(p):
+            async with semaphore:
+                return await _make_request_with_retries(p)
+        
+        tasks = [limited_request(p) for p in payload]
+        
+        if use_tqdm:
+            from tqdm import tqdm
+            
+            # Create a wrapper to update progress bar
+            completed_count = [0]
+            pbar = tqdm(total=len(tasks), desc="Processing")
+            
+            async def tracked_task(task):
+                result = await task
+                completed_count[0] += 1
+                pbar.update(1)
+                return result
+            
+            results = await asyncio.gather(*[tracked_task(task) for task in tasks])
+            pbar.close()
+        else:
+            results = await asyncio.gather(*tasks)
+    
         # Flatten results
         flattened_results = []
         for result in results:
@@ -310,6 +339,20 @@ class RemoteVLLM:
             choice["text"] for result in results for choice in result.get("choices", [])
         ]
         return unflatten_list(completions, [n] * len(input_data))
+
+    async def close(self):
+        """
+        Cleanup - sessions are managed by shared session manager per event loop.
+        No instance-level cleanup needed.
+        """
+        # Sessions are managed by shared session manager, no cleanup needed here
+        pass
+    
+    def __del__(self):
+        """Cleanup on deletion - sessions are managed by shared session manager."""
+        # Sessions are managed by shared session manager per event loop
+        # No instance-level cleanup needed
+        pass
 
     def __str__(self):
         return f"RemoteVLLM(model_path={self.model_path}, server_url={self.server_url})"

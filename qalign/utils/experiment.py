@@ -16,6 +16,7 @@ from qalign.utils.list import chunked
 
 from qalign.reward import RemoteReward
 from qalign.model import RemoteVLLM
+from qalign.anthropic_model import RemoteAnthropic
 from qalign.base import QAlign
 
 
@@ -80,7 +81,7 @@ def create_extension_experiment(storage, experiment, new_steps=1024):
         }
         for data in experiment.instances(lazy_iterable=True)
     ]
-
+    
     meta = copy.deepcopy(experiment.meta)
 
     meta["steps"] = new_steps
@@ -176,7 +177,7 @@ def calculate_reward_scores(
     ]
 
 
-def run_ancestral(experiment, model, steps, data_batches):
+def run_ancestral(experiment, model, steps, data_batches,**kwargs):
 
     steps = experiment.meta["steps"]
 
@@ -211,7 +212,7 @@ def run_quest(
     data_batches,
     reward_url="http://localhost:8080",
     num_workers=4,
-    batch_size=32,
+    batch_size=128,
 ):
 
     reward = RemoteReward(
@@ -256,16 +257,19 @@ def run_quest_bootstrap(
     model,
     steps,
     reward_url="http://localhost:8080",
+    num_workers=16,
+    batch_size=512,
 ):
 
 
     reward = RemoteReward(
         server_url=reward_url,
         model_path=experiment.meta["reward_model_path"],
+        max_concurrent_requests=batch_size,
     )
     
     for data_batch in chunked(
-        experiment.meta["bootstrap"], experiment.get("batch_size")
+        experiment.meta["bootstrap"], batch_size
     ):
 
         chain = QAlign(
@@ -275,18 +279,19 @@ def run_quest_bootstrap(
         )
 
         chain_outputs = chain.run_pipelined(
-            prompts=[data["chat_template_prompt"] for data in data_batch],
+            conversations=[data["input"]["chat_template_prompt"] for data in data_batch],
             steps=steps,
             use_tqdm=True,
             warm_start=[
                 {"completion": data["completion"], "reward": data["reward"]}
                 for data in data_batch
             ],
-            workers=4,
+            workers=num_workers,
+            batch_size=batch_size//num_workers,
         )
 
-        outputs = chain_outputs.state_path
-
+        outputs = [output for _, output in chain_outputs]
+        
         experiment.add_instances(
             inputs=data_batch,
             outputs=outputs,
@@ -304,19 +309,29 @@ def run_experiment(
     experiment,
     model_url="http://localhost:8080",
     reward_url="http://localhost:8080",
-    num_workers=4,
-    max_concurrent_requests=64,
-    batch_size=64,
+    num_workers=16,
+    max_concurrent_requests=1024,
+    batch_size=256,
 ):
 
-    # Create model
-    model =  RemoteVLLM(
-        server_url=model_url,
-        model_path=experiment.meta["model_path"],
-        max_prompt_length=experiment.meta["max_prompt_length"],
-        max_new_tokens=experiment.meta["max_new_tokens"],
-        max_concurrent_requests=batch_size,
-    )
+    if "anthropic" in model_url:
+        num_workers = 0
+        model = RemoteAnthropic(
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            model_path=experiment.meta["model_path"],
+            max_prompt_length=experiment.meta["max_prompt_length"],
+            max_new_tokens=experiment.meta["max_new_tokens"],
+            max_concurrent_requests=max_concurrent_requests,
+        )
+    else:
+        # Create model
+        model =  RemoteVLLM(
+            server_url=model_url,
+            model_path=experiment.meta["model_path"],
+            max_prompt_length=experiment.meta["max_prompt_length"],
+            max_new_tokens=experiment.meta["max_new_tokens"],
+            max_concurrent_requests=max_concurrent_requests,
+        )
 
     completed = len(experiment.instances())
 
@@ -329,6 +344,8 @@ def run_experiment(
                 model=model,
                 steps=experiment.meta["steps"],
                 reward_url=reward_url,
+                num_workers=num_workers,
+                batch_size=batch_size,
             )
 
     else:
@@ -363,6 +380,7 @@ def run_experiment(
                 data_batches=data_batches,
                 reward_url=reward_url,
                 num_workers=num_workers,
+                batch_size=batch_size//num_workers,
             )
 
 

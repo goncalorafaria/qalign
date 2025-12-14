@@ -4,12 +4,15 @@ from typing import List, Optional, Dict
 import requests
 import aiohttp
 import asyncio
+import threading
 from qalign.utils.list import chunked
+from qalign.shared_session import get_shared_session
 from itertools import islice
 import os
 from typing import List
 import gc
 import math
+import logging
 
 from scipy.special import logit
 #from quest.utils.logger import fix_loggers
@@ -27,6 +30,7 @@ from tqdm import tqdm
 from tqdm.asyncio import tqdm as tqdm_asyncio
 
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+logger = logging.getLogger(__name__)
 class Reward:
     """
     The base class for reward evaluation.
@@ -308,6 +312,8 @@ class RemoteReward(Reward):
         
         # Test connection and get model info
         self._check_health()
+        # Don't cache session on instance - let shared session manager handle it per event loop
+        # Each asyncio.run() creates a new event loop, so instance-level caching doesn't work
     
     def _detect_backend(self) -> str:
         """
@@ -390,68 +396,90 @@ class RemoteReward(Reward):
         """
        
 
-        # Create ONE session with connection pooling for ALL requests
-        # Since gateway is a single host, set limits based on max_concurrent_requests
-        # Connection reuse means actual connections needed < max_concurrent_requests
-        connector = aiohttp.TCPConnector(
-            limit=self.max_concurrent_requests,  # Total connection pool size
-            limit_per_host=self.max_concurrent_requests,  # Max connections to gateway
-            ttl_dns_cache=600,
-            enable_cleanup_closed=True
-        )
+        # Get shared session for current event loop - shared session manager handles caching
+        # Don't cache on instance since each asyncio.run() creates a new event loop
+        session = await get_shared_session()
+        if session is None or session.closed:
+            raise RuntimeError(
+                "Shared session not available. "
+                "This should not happen - session should auto-initialize."
+            )
         
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async def _make_request_with_retries(p):
-                for attempt in range(self.max_retries):
-                    try:
-                        async with session.post(
-                            f"{self.server_url}/{self.routes['evaluate']}",
-                            json=p,
-                            timeout=aiohttp.ClientTimeout(total=self.timeout),
-                        ) as resp:
-                            resp.raise_for_status()
-                            data = await resp.json()
-                            return data
-                    except Exception as e:
-                        if attempt == self.max_retries - 1:
-                            raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
-                        await asyncio.sleep(self.polling_interval)
+        async def _make_request_with_retries(p):
+            for attempt in range(self.max_retries):
+                try:
+                    # Get shared session - it's cached per event loop by the manager
+                    # No need to cache on instance since we're in the same event loop
+                    current_session = await get_shared_session()
+                    if current_session is None or current_session.closed:
+                        raise RuntimeError(
+                            "Shared session not available. "
+                            "This should not happen - session should auto-initialize."
+                        )
+                    
+                    async with current_session.post(
+                        f"{self.server_url}/{self.routes['evaluate']}",
+                        json=p,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                        return data
+                except Exception as e:
+                    # Log connection errors to identify contention issues
+                    error_str = str(e).lower()
+                    if "connection" in error_str or "timeout" in error_str or "refused" in error_str:
+                        logger.warning(
+                            f"Connection error on attempt {attempt + 1}/{self.max_retries}: {e} "
+                            f"(thread {threading.current_thread().ident})"
+                        )
+                    elif "session is closed" in error_str or ("closed" in error_str and "session" in error_str):
+                        logger.warning(
+                            f"Session closed during request, will be recreated on next attempt. "
+                            f"Attempt: {attempt + 1}/{self.max_retries}"
+                        )
+                    else:
+                        logger.debug(f"Request error on attempt {attempt + 1}/{self.max_retries}: {e}")
+                    
+                    if attempt == self.max_retries - 1:
+                        raise RuntimeError(f"Request failed after {self.max_retries} attempts: {e}")
+                    await asyncio.sleep(self.polling_interval)
 
-            # Limit concurrent requests using a semaphore (no batching for-loop)
-            semaphore = asyncio.Semaphore(self.max_concurrent_requests)
+        # Limit concurrent requests using a semaphore (no batching for-loop)
+        semaphore = asyncio.Semaphore(self.max_concurrent_requests)
 
-            async def limited_request(p):
-                async with semaphore:
-                    return await _make_request_with_retries(p)
+        async def limited_request(p):
+            async with semaphore:
+                return await _make_request_with_retries(p)
 
-            tasks = [limited_request(p) for p in payload]
+        tasks = [limited_request(p) for p in payload]
 
-            if use_tqdm:
-                # Use tqdm with gather to preserve order
-                
-                
-                # Create a wrapper to update progress bar
-                completed_count = [0]
-                pbar = tqdm(total=len(tasks), desc="Evaluating")
-                
-                async def tracked_task(task):
-                    result = await task
-                    completed_count[0] += 1
-                    pbar.update(1)
-                    return result
-                
-                results = await asyncio.gather(*[tracked_task(task) for task in tasks])
-                pbar.close()
-            else:
-                results = await asyncio.gather(*tasks)
+        if use_tqdm:
+            # Use tqdm with gather to preserve order
+            
+            
+            # Create a wrapper to update progress bar
+            completed_count = [0]
+            pbar = tqdm(total=len(tasks), desc="Evaluating")
+            
+            async def tracked_task(task):
+                result = await task
+                completed_count[0] += 1
+                pbar.update(1)
+                return result
+            
+            results = await asyncio.gather(*[tracked_task(task) for task in tasks])
+            pbar.close()
+        else:
+            results = await asyncio.gather(*tasks)
 
-            if DEBUG:
-                print(results[0])
+        if DEBUG:
+            print(results[0])
 
-            # Extract rewards from results
-            rewards = [self.routes["parse"](result) for result in results]
+        # Extract rewards from results
+        rewards = [self.routes["parse"](result) for result in results]
 
-            return rewards
+        return rewards
 
     def _truncate_conversation(self, conversation):
         """
@@ -551,6 +579,20 @@ class RemoteReward(Reward):
         results = self._evaluate(packed_payload,use_tqdm=use_tqdm)
 
         return results
+
+    async def close(self):
+        """
+        Cleanup - sessions are managed by shared session manager per event loop.
+        No instance-level cleanup needed.
+        """
+        # Sessions are managed by shared session manager, no cleanup needed here
+        pass
+    
+    def __del__(self):
+        """Cleanup on deletion - sessions are managed by shared session manager."""
+        # Sessions are managed by shared session manager per event loop
+        # No instance-level cleanup needed
+        pass
 
 
 class RewardModel(Reward):
