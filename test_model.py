@@ -5,8 +5,16 @@ from qalign.model import RemoteVLLM
 
 
 model = RemoteVLLM(
-    server_url="http://g3090.hyak.local:8080",
-    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    server_url="http://g3098.hyak.local:8080",
+    model_path="Qwen/Qwen2.5-Math-1.5B-Instruct",
 )
 
-print(model.ancestral(["What is the capital of France?"]))
+print("starting endpoint")
+
+t= [{"role": "user", "content": "Convert the point $(0,3)$ in rectangular coordinates to polar coordinates.  Enter your answer in the form $(r,\theta),$ where $r > 0$ and $0 \le \theta < 2 \pi.$"}]
+
+
+print(t)
+
+print(model.ancestral([t]))
+

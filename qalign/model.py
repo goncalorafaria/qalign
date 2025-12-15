@@ -310,9 +310,15 @@ class RemoteVLLM:
         n: int = 1,
         use_tqdm=False,
     ):
+        prompts =[ self.tokenizer.apply_chat_template(
+            chat_template_prompt,
+            tokenize=False,
+            add_generation_prompt=True,
+        ) for chat_template_prompt in input_data]
+        
         # Truncate input_data (text) by tokenizing, truncating, then decoding
         tokenized_data = []
-        for prompt in input_data:
+        for prompt in prompts:
             tokens = self.tokenizer.encode(prompt, max_length=self.max_prompt_length, truncation=True)
             truncated_prompt = self.tokenizer.decode(tokens, skip_special_tokens=False)
             tokenized_data.append(truncated_prompt)

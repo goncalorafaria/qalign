@@ -185,12 +185,7 @@ def run_ancestral(experiment, model, steps, data_batches,**kwargs):
     # Process each batch
     for data_batch in tqdm(data_batches):
         
-        
-        prompts = [ model.tokenizer.apply_chat_template(
-            d["chat_template_prompt"],
-            tokenize=False,
-            add_generation_prompt=True,
-        ) for d in data_batch ]
+        prompts = [ d["chat_template_prompt"] for d in data_batch ]
         
         
         completions_txt = model.ancestral(prompts, n=steps)
