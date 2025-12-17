@@ -19,6 +19,8 @@ from qalign.model import RemoteVLLM
 from qalign.anthropic_model import RemoteAnthropic
 from qalign.base import QAlign
 
+import logging
+logger = logging.getLogger(__name__)
 
 def create_experiment(
     save_path: str,
@@ -131,6 +133,26 @@ def get_batched_data(
     """
     Gets batched data from a dataset using standard configurations.
     """
+    
+    
+    logger.info(f"Getting batched data for model {model.model_path} and dataset {dataset_path}")
+    logger.info(f"Start index: {start_index}")
+    logger.info(f"Number of chains: {num_chains}")
+    logger.info(f"Completed: {completed}")
+    logger.info(f"Format: {format}")
+    logger.info(f"Use few shot: {use_few_shot}")
+    logger.info(f"Prompt template: {prompt_template}")
+    logger.info(f"Batch size: {batch_size}")
+    logger.info(f"Number of chains: {num_chains}")
+    logger.info(f"Completed: {completed}")
+    logger.info(f"Format: {format}")
+    logger.info(f"Use few shot: {use_few_shot}")
+    logger.info(f"Prompt template: {prompt_template}")
+    logger.info(f"Batch size: {batch_size}")
+    logger.info(f"Number of chains: {num_chains}")
+    logger.info(f"Completed: {completed}")
+    logger.info("--"*20)
+    
     data_iterable = get_data_iterable(
         model_path=model.model_path,
         dataset_path=dataset_path,
@@ -305,7 +327,7 @@ def run_experiment(
     model_url="http://localhost:8080",
     reward_url="http://localhost:8080",
     num_workers=16,
-    max_concurrent_requests=1024,
+    max_concurrent_requests=10000,
     batch_size=256,
 ):
 

@@ -31,8 +31,8 @@ class SharedSessionManager:
         # Connection pool limits - set high to avoid contention
         # Each thread gets its own session, so these limits are per-thread
         # If you have N threads, total connections = N * limit_per_host
-        self._default_limit = 4096  # Increased from 2048
-        self._default_limit_per_host = 2048  # Increased from 1024 to reduce contention
+        self._default_limit = 10000  # Increased from 2048
+        self._default_limit_per_host = 8000  # Increased from 1024 to reduce contention
         self._default_ttl_dns_cache = 300
         self._default_keepalive_timeout = 30
         self._default_timeout = None
@@ -106,7 +106,7 @@ class SharedSessionManager:
         if loop in sessions:
             session, _ = sessions[loop]
             if session is not None and not session.closed:
-                logger.debug(f"Reusing existing shared session for event loop {id(loop)} (thread {threading.current_thread().ident})")
+                #logger.debug(f"Reusing existing shared session for event loop {id(loop)} (thread {threading.current_thread().ident})")
                 return session
             # Session is closed, remove it
             logger.warning(

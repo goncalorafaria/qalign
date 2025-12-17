@@ -8,12 +8,20 @@ import logging
 import threading
 from qalign.utils.list import unflatten_list
 from qalign.shared_session import get_shared_session
+from qalign.thread_loop_client import ThreadLoopClient
 
 ## get env variable DEBUG
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+if DEBUG:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+
 logger = logging.getLogger(__name__)
 
-class RemoteVLLM:
+class RemoteVLLM(ThreadLoopClient):
     def __init__(
         self,
         server_url: str,
@@ -43,7 +51,6 @@ class RemoteVLLM:
         self._check_health()
         
 
-
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_path,
             padding_side="left",
@@ -58,8 +65,20 @@ class RemoteVLLM:
             self.tokenizer.pad_token_id = self.tokenizer.bos_token_id
             self.tokenizer.pad_token = self.tokenizer.bos_token
         
-        # Don't cache session on instance - let shared session manager handle it per event loop
-        # Each asyncio.run() creates a new event loop, so instance-level caching doesn't work
+        # No instance-level loop: we share a single event loop per worker thread
+        # across all clients via ThreadLoopClient.
+
+    def _run_on_loop(self, coro):
+        return self._run_on_thread_loop(coro)
+
+    def __getstate__(self):
+        """
+        Deepcopy/pickle safe: no thread-local runtime objects stored on instance.
+        """
+        return super().__getstate__()
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
 
     def encode(self, prompt_txt):
         tokens = self.tokenize(prompt_txt)
@@ -115,9 +134,9 @@ class RemoteVLLM:
 
     def _post_with_retries(self, endpoint, payload, use_tqdm=False):
         """Synchronous wrapper for async POST requests with retries."""
-        # Each asyncio.run() creates a new event loop, so we can't share sessions
-        # across calls. The async method will create a session for this call.
-        return asyncio.run(self._post_with_retries_async(endpoint, payload, use_tqdm=use_tqdm))
+        return self._run_on_thread_loop(
+            self._post_with_retries_async(endpoint, payload, use_tqdm=use_tqdm)
+        )
     
     async def _post_with_retries_async(self, endpoint, payload, use_tqdm=False):
         """
@@ -134,8 +153,7 @@ class RemoteVLLM:
         Raises:
             RuntimeError: If all retry attempts fail
         """
-        # Get shared session for current event loop - shared session manager handles caching
-        # Don't cache on instance since each asyncio.run() creates a new event loop
+        # Get shared session for this (stable) event loop - shared session manager handles caching.
         session = await get_shared_session()
         if session is None or session.closed:
             raise RuntimeError(
@@ -146,16 +164,7 @@ class RemoteVLLM:
         async def _make_request_with_retries(p):
             for attempt in range(self.max_retries):
                 try:
-                    # Get shared session - it's cached per event loop by the manager
-                    # No need to cache on instance since we're in the same event loop
-                    current_session = await get_shared_session()
-                    if current_session is None or current_session.closed:
-                        raise RuntimeError(
-                            "Shared session not available. "
-                            "This should not happen - session should auto-initialize."
-                        )
-                    
-                    async with current_session.post(
+                    async with session.post(
                         f"{self.server_url}{endpoint}",
                         json=p,
                         timeout=aiohttp.ClientTimeout(total=self.timeout),
@@ -189,8 +198,15 @@ class RemoteVLLM:
         semaphore = asyncio.Semaphore(self.max_concurrent_requests)
         
         async def limited_request(p):
+            
             async with semaphore:
-                return await _make_request_with_retries(p)
+               
+                result = await _make_request_with_retries(p)
+              
+                
+            
+                
+                return result
         
         tasks = [limited_request(p) for p in payload]
         
@@ -326,7 +342,8 @@ class RemoteVLLM:
         prompts = []
         for prompt in tokenized_data: 
             prompts.extend([prompt] * n)
-
+            
+        logger.info(f"prompts count: {len(prompts)}")
         payload = [
             {
                 "model": self.model_path,
@@ -348,17 +365,14 @@ class RemoteVLLM:
 
     async def close(self):
         """
-        Cleanup - sessions are managed by shared session manager per event loop.
-        No instance-level cleanup needed.
+        No-op: event loop is managed per thread in ThreadLoopClient.
+        Shared sessions are managed per loop by the shared session manager.
         """
-        # Sessions are managed by shared session manager, no cleanup needed here
-        pass
+        return
     
     def __del__(self):
         """Cleanup on deletion - sessions are managed by shared session manager."""
-        # Sessions are managed by shared session manager per event loop
-        # No instance-level cleanup needed
-        pass
+        return
 
     def __str__(self):
         return f"RemoteVLLM(model_path={self.model_path}, server_url={self.server_url})"

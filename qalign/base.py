@@ -623,6 +623,10 @@ class QAlign:
         #print(conversations[0])
         def worker_thread(thread_id):
             """Worker thread that processes batches"""
+            # Important: deepcopy once per worker, not once per batch.
+            # Deepcopying per batch forces re-creation of runtime state (e.g., aiohttp sessions)
+            # and defeats connection pooling.
+            local_chain = deepcopy(chain)
             while not stop_event.is_set():
                 try:
                     # Get batch from queue with timeout
@@ -631,7 +635,7 @@ class QAlign:
                     
                     print(f"Processing batch {batch_index} with {len(data_batch)} conversations - {thread_id}")
                     #print(data_batch[0])
-                    chain_outputs = deepcopy(chain).run(
+                    chain_outputs = local_chain.run(
                         conversations=data_batch,
                         steps=steps,
                         use_tqdm=use_tqdm,

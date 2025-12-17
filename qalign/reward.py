@@ -28,6 +28,7 @@ from torch import nn
 import requests
 from tqdm import tqdm
 from tqdm.asyncio import tqdm as tqdm_asyncio
+from qalign.thread_loop_client import ThreadLoopClient
 
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 logger = logging.getLogger(__name__)
@@ -242,7 +243,7 @@ class RewardSum(RewardMix):
         },
     )
 """
-class RemoteReward(Reward):
+class RemoteReward(ThreadLoopClient, Reward):
     def __init__(
         self,
         server_url: str,
@@ -314,6 +315,16 @@ class RemoteReward(Reward):
         self._check_health()
         # Don't cache session on instance - let shared session manager handle it per event loop
         # Each asyncio.run() creates a new event loop, so instance-level caching doesn't work
+
+    def _run_on_loop(self, coro):
+        return self._run_on_thread_loop(coro)
+
+    def __getstate__(self):
+        # Deepcopy/pickle safe: no thread-local runtime objects stored on instance.
+        return super().__getstate__()
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
     
     def _detect_backend(self) -> str:
         """
@@ -378,7 +389,7 @@ class RemoteReward(Reward):
 
     def _evaluate(self, payload,use_tqdm=False) -> List[float]:
         """Synchronous wrapper for async evaluation with retries."""
-        return asyncio.run(self._evaluate_async(payload,use_tqdm=use_tqdm))
+        return self._run_on_thread_loop(self._evaluate_async(payload, use_tqdm=use_tqdm))
 
     async def _evaluate_async(self, payload, use_tqdm=False) -> List[float]:
         """
@@ -397,7 +408,6 @@ class RemoteReward(Reward):
        
 
         # Get shared session for current event loop - shared session manager handles caching
-        # Don't cache on instance since each asyncio.run() creates a new event loop
         session = await get_shared_session()
         if session is None or session.closed:
             raise RuntimeError(
@@ -408,16 +418,7 @@ class RemoteReward(Reward):
         async def _make_request_with_retries(p):
             for attempt in range(self.max_retries):
                 try:
-                    # Get shared session - it's cached per event loop by the manager
-                    # No need to cache on instance since we're in the same event loop
-                    current_session = await get_shared_session()
-                    if current_session is None or current_session.closed:
-                        raise RuntimeError(
-                            "Shared session not available. "
-                            "This should not happen - session should auto-initialize."
-                        )
-                    
-                    async with current_session.post(
+                    async with session.post(
                         f"{self.server_url}/{self.routes['evaluate']}",
                         json=p,
                         timeout=aiohttp.ClientTimeout(total=self.timeout),
