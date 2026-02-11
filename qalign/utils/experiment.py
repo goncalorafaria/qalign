@@ -210,7 +210,7 @@ def run_ancestral(experiment, model, steps, data_batches,**kwargs):
         prompts = [ d["chat_template_prompt"] for d in data_batch ]
         
         
-        completions_txt = model.ancestral(prompts, n=steps)
+        completions_txt, transition_scores = model.ancestral(prompts, n=steps)
         outputs = [
             [{"text": state_t} for state_t in instance_txt]
             for instance_txt in completions_txt

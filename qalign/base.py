@@ -45,6 +45,7 @@ class QAlign:
         text: List[str]  # The completion text for the current state
         index: List[int]  # The index of the current state
         t: int = 0  # The current time step
+        scores: List[float] = None # The scores of the current state
 
         def to_json(self):
             """
@@ -56,6 +57,7 @@ class QAlign:
                 "text": self.text,
                 "t": self.t,
                 "index": self.index,
+                "scores": self.scores,
             }
 
         def copy_relevant(self, relevant_chains: List[int]):
@@ -65,6 +67,7 @@ class QAlign:
                 text=[self.text[i] for i in relevant_chains],
                 t=self.t,
                 index=[self.index[i] for i in relevant_chains],
+                scores=[self.scores[i] for i in relevant_chains],
             )
 
         def paste_relevant(
@@ -79,7 +82,7 @@ class QAlign:
                 new_state.completion[chain] = additions.completion[i]
                 new_state.text[chain] = additions.text[i]
                 new_state.index[chain] = additions.index[i]
-
+                new_state.scores[chain] = additions.scores[i]
             new_state.t = additions.t
 
             return new_state
@@ -160,7 +163,7 @@ class QAlign:
         """
         
         # Generate the initial completion
-        completions = self.model.continuation(
+        completions, transition_scores = self.model.continuation(
             prompt,
             prefix=None,
         )
@@ -178,6 +181,7 @@ class QAlign:
             completion=completions,
             text=completions_text,
             index=[0] * len(completions),
+            scores=transition_scores,
         )
         
         return state
@@ -195,6 +199,11 @@ class QAlign:
         """
         completions_text = [s["completion"] for s in samples]  # list of samples.
         completions_reward = [s["reward"] for s in samples]
+        
+        if samples[0].get("scores", None) is not None:
+            scores = [s["scores"] for s in samples]
+        else:
+            scores = [0.0] * len(completions_text)
 
         completions = self.model.tokenize(completions_text)
 
@@ -204,6 +213,7 @@ class QAlign:
             completion=completions,
             text=completions_text,
             index=[0] * len(completions),
+            scores=scores,
         )
 
         return state
@@ -294,7 +304,7 @@ class QAlign:
             )
         ]
 
-        continuation_proposal = self.model.continuation(
+        continuation_proposal, transition_scores = self.model.continuation(
             prompt,
             prefix,
         )
@@ -319,6 +329,7 @@ class QAlign:
             text=proposal_text,
             index=indeces,
             t=previous_state.t + 1,
+            scores=transition_scores,
         )
 
         return proposal_state
@@ -379,6 +390,11 @@ class QAlign:
                 else None
             ),
             t=proposal_state.t,
+            scores=join_accepted_values(
+                accept,
+                proposal_state.scores,
+                previous_state.scores,
+            ),
         )
 
         return state

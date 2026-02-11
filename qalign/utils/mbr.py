@@ -373,6 +373,7 @@ def weighted_mbr_pick_progression(
     n=None,
     max_steps=None,
     metric="bleu",
+    beta=1.0,
 ):
 
     if max_steps is None:
@@ -395,6 +396,10 @@ def weighted_mbr_pick_progression(
             for inds, r in zip(repeat_inds, rewards)
         ]
     )
+    
+    #softmax the rewards
+    from scipy.special import softmax
+    repeat_rewards = softmax(repeat_rewards/beta, axis=1)
 
     repeat_rewards = np.expand_dims(repeat_rewards, axis=1)
 

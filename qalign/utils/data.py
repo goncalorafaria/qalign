@@ -277,6 +277,8 @@ def processdeepscaler_data(
   
     math_messages = []
 
+    # the gt has some weird option A B or C things.
+    solution = "\\boxed{" + entry["answer"] + "}"
     chat_template = math_messages + [
         {
             "role": "user",
@@ -284,7 +286,7 @@ def processdeepscaler_data(
         },
         {
             "role": "assistant",
-            "content": entry["solution"],
+            "content": solution,
         },
     ]
 
@@ -297,7 +299,8 @@ def processdeepscaler_data(
         chat_template_prompt=chat_template[:-1],
         format=format,
         tokenizer=tokenizer,
-        answer=entry["solution"],  # answer,
+        answer=solution,  # answer,
+        #solution=solution,
     )
 
 def processaime25_data(
@@ -478,6 +481,25 @@ def processtruthfulqa_data(
         answer=prompt_ans,  # answer,
     )
 
+def processrubrics_data(
+    entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
+):
+    chat_template = [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=entry["prompt"]),
+        },
+       
+    ]
+    
+    return general_process_data(
+        chat_template_prompt=chat_template,
+        format=format,
+        tokenizer=tokenizer,
+        answer="no answer",  # answer,
+    )
+
+
 
 def process_all_redux_data():
 
@@ -529,6 +551,7 @@ SUPPORTED_DATASETS = {
     "openai/gsm8k": ({"name": "socratic"}, processgsm_data, "openai/gsm8k"),
     "apple/GSM-Symbolic-p1": ({"name": "p1"}, processgsm_data, "apple/GSM-Symbolic"),
     "apple/GSM-Symbolic-p2": ({"name": "p2"}, processgsm_data, "apple/GSM-Symbolic"),
+    
     "Anthropic/hh-rlhf": ({}, processhh_data, "Anthropic/hh-rlhf"),
     "lighteval/MATH": ({}, processmath_data, "lighteval/MATH"),
     "cais/mmlu": ({"name": "all"}, processmmlu_data, "cais/mmlu"),
@@ -572,6 +595,16 @@ SUPPORTED_DATASETS = {
         {},
         processaime25_data,
         "math-ai/aime25",
+    ),
+     "JunkaiZ/Rubrics-generalist": (
+        {"name":"generalist"},
+        processrubrics_data,
+        "JunkaiZ/Rubrics",
+    ),
+     "JunkaiZ/Rubrics-health": (
+        {"name":"health"},
+        processrubrics_data,
+        "JunkaiZ/Rubrics",
     ),
      #processdeepscaler_data
     # eval

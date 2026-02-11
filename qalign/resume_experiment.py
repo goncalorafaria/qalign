@@ -13,6 +13,8 @@ def main(
     model_url: str = "http://localhost:8080",
     reward_url: str = "http://localhost:8080",
     batch_size: int = 128,
+    max_concurrent_requests: int = 4096,
+    num_workers=16,
 ):
 
     storage = DiskStorage(save_path, "rw")
@@ -25,6 +27,8 @@ def main(
             model_url=model_url,
             reward_url=reward_url,
             batch_size=batch_size,
+            max_concurrent_requests=max_concurrent_requests,
+            num_workers=num_workers,
         )
 
     else:

@@ -9,7 +9,7 @@ import threading
 from qalign.utils.list import unflatten_list
 from qalign.shared_session import get_shared_session
 from qalign.thread_loop_client import ThreadLoopClient
-
+import numpy as np
 ## get env variable DEBUG
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
@@ -33,10 +33,11 @@ class RemoteVLLM(ThreadLoopClient):
         timeout: float = 300,
         max_retries: int = 15,
         max_concurrent_requests: int = 256,
+        track_logprobs: bool = False,
     ):
         
         self.server_url = server_url.rstrip("/")
-       
+        self.track_logprobs = track_logprobs
     
         self.temperature = temperature
         self.max_new_tokens = max_new_tokens
@@ -134,6 +135,7 @@ class RemoteVLLM(ThreadLoopClient):
 
     def _post_with_retries(self, endpoint, payload, use_tqdm=False):
         """Synchronous wrapper for async POST requests with retries."""
+        logger.debug(f"Posting with retries to {endpoint} with payload: {payload}")
         return self._run_on_thread_loop(
             self._post_with_retries_async(endpoint, payload, use_tqdm=use_tqdm)
         )
@@ -289,8 +291,6 @@ class RemoteVLLM(ThreadLoopClient):
         #print("lengths-prefix:",lengths)
          ## skip special tokens at False was causing major issues.
         prompt_text = self.decode_tokenize(input_data)
-        
-       
 
         payload = [
             {
@@ -300,11 +300,13 @@ class RemoteVLLM(ThreadLoopClient):
                 "logprobs": 1,
                 "max_tokens": self.max_new_tokens,
                 "stop": self.stop_tokens,
+                **({"echo": True} if self.track_logprobs else {}),# this might break closed model apis. or sglang.
             }
             for p in prompt_text
         ]
 
         if DEBUG:
+            print("lengths: ",lengths)
             print("model_packet:",payload[0])
 
         results = self._post_with_retries("/v1/completions", payload, use_tqdm=use_tqdm)
@@ -314,11 +316,23 @@ class RemoteVLLM(ThreadLoopClient):
             for result in results
             for choice in result.get("choices", [])
         ]
+        
+        if self.track_logprobs:
+            completions_logprobs = [
+                float(np.nansum(choice["logprobs"]["token_logprobs"][1:]))
+                for result in results
+                for choice in result.get("choices", [])
+            ]
+        else:
+            completions_logprobs = [0.0] * len(completions)
 
+      
+        
         completion_ids = [xi for xi in self.tokenize(completions)]
         #print("lengths-completion:",[len(xi) for xi in completion_ids])
+        # results[0].get("choices", [])[0]
         
-        return completion_ids 
+        return completion_ids, completions_logprobs
 
     def ancestral(
         self,
@@ -326,18 +340,8 @@ class RemoteVLLM(ThreadLoopClient):
         n: int = 1,
         use_tqdm=False,
     ):
-        prompts =[ self.tokenizer.apply_chat_template(
-            chat_template_prompt,
-            tokenize=False,
-            add_generation_prompt=True,
-        ) for chat_template_prompt in input_data]
         
-        # Truncate input_data (text) by tokenizing, truncating, then decoding
-        tokenized_data = []
-        for prompt in prompts:
-            tokens = self.tokenizer.encode(prompt, max_length=self.max_prompt_length, truncation=True)
-            truncated_prompt = self.tokenizer.decode(tokens, skip_special_tokens=False)
-            tokenized_data.append(truncated_prompt)
+        tokenized_data = self._prep_prompts(input_data, add_generation_prompt=True)
         
         prompts = []
         for prompt in tokenized_data: 
@@ -351,7 +355,9 @@ class RemoteVLLM(ThreadLoopClient):
                 "max_tokens": self.max_new_tokens,
                 "temperature": self.temperature, 
                 "n": 1,
+                "logprobs": 1,
                 "stop": self.stop_tokens,
+                **({"echo": True} if self.track_logprobs else {}),
             }
             for p in prompts
         ]
@@ -361,8 +367,69 @@ class RemoteVLLM(ThreadLoopClient):
         completions = [
             choice["text"] for result in results for choice in result.get("choices", [])
         ]
-        return unflatten_list(completions, [n] * len(input_data))
+        
+        completions_logprobs = [
+            float(np.nansum(choice["logprobs"]["token_logprobs"][1:]))
+            for result in results
+            for choice in result.get("choices", [])
+        ]
+        
+        return unflatten_list(completions, [n] * len(input_data)), completions_logprobs
 
+
+    def _prep_prompts(self, input_data, add_generation_prompt=False):
+        
+        prompts =[ self.tokenizer.apply_chat_template(
+            chat_template_prompt,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,#False#not any([ ct["role"] == "assistant" for ct in chat_template_prompt ]) ,
+        ) for chat_template_prompt in input_data ]
+        
+        # Truncate input_data (text) by tokenizing, truncating, then decoding
+        tokenized_data = []
+        for prompt in prompts:
+            tokens = self.tokenizer.encode(prompt, max_length=self.max_prompt_length, truncation=True)
+            truncated_prompt = self.tokenizer.decode(tokens, skip_special_tokens=False)
+            tokenized_data.append(truncated_prompt)
+                
+        return tokenized_data
+    
+    
+    async def _logprobs_async(self, input_data, use_tqdm=False):
+        
+        
+        prompts = self._prep_prompts(input_data, add_generation_prompt=False)
+        
+        payload = [
+            {
+                "model": self.model_path,
+                "prompt": p,
+                "max_tokens": 1,
+                "temperature": self.temperature, 
+                "n": 1,
+                "logprobs": 1,
+                "stop": self.stop_tokens,
+                "echo": True,
+            }
+            for p in prompts
+        ]
+        
+        results = await self._post_with_retries_async("/v1/completions", payload, use_tqdm=use_tqdm)
+
+        prompt_logprobs = [
+            choice["logprobs"]["token_logprobs"]
+            for result in results
+            for choice in result.get("choices", [])
+        ]
+        
+        prompt_logprobs =[ [0.0,*x[1:]] for x in prompt_logprobs ]
+        return prompt_logprobs
+
+    def logprobs(self, input_data, use_tqdm=False):
+        return self._run_on_thread_loop(
+            self._logprobs_async(input_data, use_tqdm=use_tqdm)
+        )
+        
     async def close(self):
         """
         No-op: event loop is managed per thread in ThreadLoopClient.

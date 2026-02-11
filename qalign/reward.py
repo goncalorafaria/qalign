@@ -48,8 +48,11 @@ class Reward:
         self.name = name
 
     def get_name(self) -> str:
-        return self.name.replace("/", "-").split(".")[0]
+        return self.name.replace("/", "-").replace(".","++")
 
+    async def _evaluate_async(self, conversations: List[List[Dict[str, str]]],use_tqdm=False, **kwargs) -> List[float]:
+        return self.evaluate(conversations, use_tqdm=use_tqdm, **kwargs)
+    
     def evaluate(
         self,
        conversations: List[List[Dict[str, str]]],
@@ -253,7 +256,7 @@ class RemoteReward(ThreadLoopClient, Reward):
         timeout: float = 300,  # 5 minutes default timeout
         #batch_size=64, 
         server_format: str = None,  # Auto-detect if None
-        max_concurrent_requests: int = 256,
+        max_concurrent_requests: int = 1024,
         max_prompt_length: int = 2048,  # Maximum prompt size to prevent server-side failures
     ):
         """
@@ -387,11 +390,7 @@ class RemoteReward(ThreadLoopClient, Reward):
             raise ConnectionError(f"Server health check failed: {str(e)}")
 
 
-    def _evaluate(self, payload,use_tqdm=False) -> List[float]:
-        """Synchronous wrapper for async evaluation with retries."""
-        return self._run_on_thread_loop(self._evaluate_async(payload, use_tqdm=use_tqdm))
-
-    async def _evaluate_async(self, payload, use_tqdm=False) -> List[float]:
+    async def _forward_async(self, payload, use_tqdm=False) -> List[float]:
         """
         Submit texts for evaluation with retry logic.
 
@@ -507,7 +506,8 @@ class RemoteReward(ThreadLoopClient, Reward):
             return conversation
         
         # Calculate excess tokens
-        excess_tokens = len(tokens) - self.max_prompt_length
+        excess_tokens = len(tokens) - self.max_prompt_length + 2
+        print(f"Conversation too long : {len(tokens)} > {self.max_prompt_length}- Excess tokens: {excess_tokens}")
         
         # Get the last message (response)
         if len(conversation) == 0:
@@ -529,20 +529,8 @@ class RemoteReward(ThreadLoopClient, Reward):
         
         # Return conversation with truncated response
         return conversation[:-1] + [last_message]
-
-    def evaluate(self, conversations, use_tqdm=False, **kwargs):
-        """
-        Evaluate candidates using the reward model.
-
-        Args:
-            conversations: List of conversations to evaluate
-            use_tqdm: Whether to use progress bar (not implemented yet)
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            List of reward scores
-        """
-       
+    
+    async def _evaluate_async(self, conversations, use_tqdm=False, **kwargs):
         
         # Truncate conversations that are too long
         truncated_conversations = [self._truncate_conversation(conv) for conv in conversations]
@@ -572,14 +560,29 @@ class RemoteReward(ThreadLoopClient, Reward):
             for p in payloads
         ]
         
-        
-
         if DEBUG:   
             print("<rm> payload:",packed_payload[0])
         # Evaluate using the async method (wrapped synchronously)
-        results = self._evaluate(packed_payload,use_tqdm=use_tqdm)
+        results = await self._forward_async(packed_payload,use_tqdm=use_tqdm)
 
         return results
+    
+    def evaluate(self, conversations, use_tqdm=False, **kwargs):
+        """
+        Evaluate candidates using the reward model.
+
+        Args:
+            conversations: List of conversations to evaluate
+            use_tqdm: Whether to use progress bar (not implemented yet)
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            List of reward scores
+        """
+
+        return self._run_on_thread_loop(
+            self._evaluate_async(conversations, use_tqdm=use_tqdm, **kwargs)
+        )
 
     async def close(self):
         """
@@ -782,3 +785,4 @@ class ClassificationRewardModel(RewardModel):
         ) for conv in conversations]
 
         return super().evaluate(texts, **kwargs)
+

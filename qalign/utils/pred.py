@@ -62,10 +62,12 @@ def get_strategy(
         # setup = setup.filter(lambda x: x.has_eval(key))
     elif strategy == "last":
         pick = LastPick(gaps=gaps, exp_rate=exp_rate, multiprocessing=p, **kwargs)
+    elif strategy == "mean":
+        pick = MeanPick(gaps=gaps, exp_rate=exp_rate, multiprocessing=p, **kwargs)
     elif strategy == "mbr":
         pick = MBRPick(gaps=gaps, **kwargs)
     elif strategy == "wmbr":
-        pick = WMBRPick(gaps=gaps, key=key, exp_rate=exp_rate, **kwargs)
+        pick = WMBRPick(gaps=gaps, key=key, exp_rate=exp_rate, beta=beta, **kwargs)
     elif strategy == "bonresample":
         pick = BonResamplePick(
             key=key, gaps=gaps, exp_rate=exp_rate, multiprocessing=p, **kwargs
@@ -314,6 +316,17 @@ def get_last(instance, n=512, extract_func=get_last_number):
 
     return int(responses[-1] == answer), 0.0
 
+def get_mean(instance, n=512, extract_func=get_last_number):
+    outputs = instance["outputs"][:n]
+    responses = [extract_func(output["text"]) for output in outputs]
+    answer = extract_func(instance["input"]["answer"])
+    
+    mean_correct = np.mean(
+        [ int(response == answer) for response in responses]
+    )
+    
+
+    return float(mean_correct), 0.0
 
 def is_mode_correct(instance, n=512, burnin=0, extract_func=get_last_number):
 
@@ -653,6 +666,111 @@ class LastPick(Evalutor):
                 "accs": accs_full,
             }
         ]
+        
+class MeanPick(Evalutor):
+
+    def __init__(
+        self,
+        gaps=2,
+        exp_rate=True,
+        max_num_chains=None,
+        multiprocessing=None,
+        burnin=0,
+        extract="lastnumber",
+        n=None,
+        **kwargs,
+    ):
+
+        super().__init__(
+            extract + "-mean" if n is None else extract + "-mean-" + str(n)
+        )
+        self.gaps = gaps
+        self.pmap = multiprocessing.map if multiprocessing else map
+        self.exp_rate = exp_rate
+        self.max_num_chains = max_num_chains
+        self.burnin = burnin
+        self.n = n
+        self.chunk_size = 64
+
+        if extract == "lastnumber":
+            self.extract = get_last_number
+        elif extract == "lastmath":
+            self.extract = get_last_math
+
+        elif extract == "lastoption":
+            self.extract = get_last_option
+        else:
+            ValueError("Invalid extract function")
+
+    def eval(self, exp: Exp):
+
+        if self.gaps > 0:
+            if not self.exp_rate:
+                x_axis = generate_axis(exp.meta["steps"] + 1, self.gaps)
+            else:
+                x_axis = generate_axis(exp.meta["steps"] + 1, exp.meta["steps"])
+
+        else:
+            x_axis = [exp.meta["steps"]]
+
+        # num_chains = exp.meta.get("num_chains", 1)
+        # max_num_chains = self.max_num_chains if self.max_num_chains else num_chains
+
+        # instances are in groups of num_chains .. i.e.
+        # [0,0,0,1,1,1,2,2,2,3,3,3,4,4,4]
+        # I want to group into :
+        # [[0,0,0],[1,1,1],[2,2,2],[3,3,3],[4,4,4]]
+        # so that I can compute the mean of the estimates
+        # for each group
+
+        accs_full = {xi: [] for xi in x_axis}
+
+        c = 0
+        for instance_chunk in tqdm(
+            chunked(exp.instances(lazy_iterable=True), self.chunk_size)
+        ):
+
+            c += len(instance_chunk)
+
+            if c > self.n:
+                break
+
+            is_quest = "quest" in exp.meta["variant"]
+
+            # instances = total_instances
+
+            instances = [
+                join_instances_and_repeat_accepts([i], is_quest=is_quest)
+                for i in instance_chunk
+            ]
+            # print(x_axis)
+            # print(len(instances))
+
+            for i in x_axis:
+
+                results = self.pmap(
+                    partial(
+                        get_mean,
+                        n=i * 1,
+                        extract_func=self.extract,
+                    ),
+                    instances,
+                )
+
+                accs, estimates = zip(*results)
+
+                accs_full[i].extend(accs)
+
+       
+        results = [
+            {
+                "axis": x_axis,
+                "scores": [float(np.mean(accs_full[i])) for i in x_axis],
+                "accs": [accs_full[i] for i in x_axis],
+            }
+        ]
+        return results        
+
 
 
 class BonPick(Evalutor):
@@ -966,12 +1084,15 @@ class WMBRPick(Evalutor):
         extract="lastnumber",
         n=None,
         metric="rouge",
+        beta=1.0,
         **kwargs,
     ):
-        super().__init__(f"{metric}-wmbr" if n is None else f"{metric}-wmbr-" + str(n))
+        beta_str = str(beta).replace(".", ";")
+        super().__init__(f"{metric}-{key}-wmbr-{beta_str}" if n is None else f"{metric}-{key}-wmbr-{beta_str}-{str(n)}")
         self.gaps = gaps
         self.metric = metric
         self.n = n
+        self.beta = beta
         self.reward_key = key
         print(f"Filename:", self.eval_name)
 
@@ -991,6 +1112,7 @@ class WMBRPick(Evalutor):
             k=self.gaps,
             n=n,
             metric=self.metric,
+            beta=self.beta,
         )
 
         gt = exp.get_eval(self.extract_key)[:n]
