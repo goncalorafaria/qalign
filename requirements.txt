@@ -9,5 +9,5 @@ fire
 rich
 
 # Experiment Management and Storage
-expkit-core==1.0.6
+expkit-core==1.0.7
 
