@@ -34,6 +34,7 @@ class RemoteVLLM(ThreadLoopClient):
         max_retries: int = 15,
         max_concurrent_requests: int = 256,
         track_logprobs: bool = False,
+        tokenizer_path: str = None,
     ):
         
         self.server_url = server_url.rstrip("/")
@@ -51,9 +52,9 @@ class RemoteVLLM(ThreadLoopClient):
         self.model_path = model_path 
         self._check_health()
         
-
+        self.tokenizer_path = tokenizer_path if tokenizer_path is not None else self.model_path
         self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path,
+            self.tokenizer_path,
             padding_side="left",
         )
         

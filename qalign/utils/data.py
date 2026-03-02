@@ -282,7 +282,7 @@ def processdeepscaler_data(
     chat_template = math_messages + [
         {
             "role": "user",
-            "content": prompt_template.format(prompt=entry["problem"]),
+            "content": prompt_template.format(prompt=entry["problem"], reference_response=entry["solution"]),
         },
         {
             "role": "assistant",
@@ -333,6 +333,47 @@ def processaime25_data(
     )
 
 
+def processdolci_data(
+    entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
+):
+    
+    
+    chat_template = [
+        {
+            "role": "user",
+            "content": prompt_template.format(question=entry["question"],reference_response=entry["reference_response"]),
+        }
+    ]
+    
+    return general_process_data(
+        chat_template_prompt=chat_template,
+        format=format,
+        tokenizer=tokenizer,
+        answer=entry["reference_response"],  # answer,
+    )
+    
+
+    
+def processo1medical_data(
+    entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
+):
+    
+    
+    chat_template = [
+        {
+            "role": "user",
+            "content": prompt_template.format(question=entry["Question"],response=entry["Response"]),
+        }
+    ]
+    
+    return general_process_data(
+        chat_template_prompt=chat_template,
+        format=format,
+        tokenizer=tokenizer,
+        answer=entry["Response"],  # answer,
+    )
+    
+    
 def processalpaca_data(
     entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
 ):
@@ -374,6 +415,106 @@ def processifeval_data(
         format=format,
         tokenizer=tokenizer,
         answer="no answer",
+    )
+
+
+
+def processsciknow_data(
+    entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
+):
+    
+
+    choice_options = entry["choices"]["label"]
+    choice_text=entry["choices"]["text"]
+    
+
+    
+    subject = entry["domain"]
+
+    instruction = f"Choose the correct answer to the following multiple-choice question about {subject}.\n\n"
+
+    prompt = entry["question"]
+
+
+    instruction += "Question: {}\n\n".format(prompt)
+
+    for option, text in zip(choice_options, choice_text):
+        instruction += "{}). {}\n".format(option, text)
+
+    instruction += "\nProvide your reasoning about the answer and finish your answer with the letter corresponding to the correct option (e.g., A, B, C, or D).\n\n"
+
+    prompt_ans = "\nAnswer:"+" {}\n\n".format(entry["answerKey"])
+
+    entry = {"prompt": instruction, "answer": prompt_ans}
+
+    chat_template = [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=instruction),
+        },
+        {
+            "role": "assistant",
+            "content": prompt_ans,
+        },
+    ]
+    
+
+    # Get the final answer for evaluation
+    # answer = get_last_math(chat_template[-1]["content"])
+    # if answer is None:
+    #    return None
+
+    return general_process_data(
+        chat_template_prompt=chat_template[:-1],
+        format=format,
+        tokenizer=tokenizer,
+        answer=prompt_ans,  # answer,
+    )
+
+def processmedmcqa_data(entry, tokenizer, prompt_template, format="chat", use_few_shot=False, **kwargs
+):
+    choice_options = ["A", "B", "C", "D"]
+    choice_text = [entry["opa"], entry["opb"], entry["opc"], entry["opd"]]
+
+    subject = entry["subject_name"]
+
+    instruction = f"Choose the correct answer to the following multiple-choice question about {subject}.\n\n"
+
+    instruction += "Question: {}\n\n".format(entry["question"])
+
+    for option, text in zip(choice_options, choice_text):
+        instruction += "{}). {}\n".format(option, text)
+
+    instruction += "\nProvide your reasoning about the answer and finish your answer with the letter corresponding to the correct option (e.g., A, B, C, or D).\n\n"
+
+    cop = entry["cop"]
+    answer_letter = choice_options[cop] if cop is not None and 0 <= cop <= 3 else "A"
+    
+    # really short explanation : entry["exp"]
+    
+    prompt_ans = "\nAnswer: {}\n\n".format(answer_letter)
+    
+    if entry["exp"] is not None:
+        prompt_ans = "\nExplanation: {}".format(entry["exp"]) + prompt_ans
+        
+    
+    chat_template = [
+        {
+            "role": "user",
+            "content": prompt_template.format(prompt=instruction, answer=prompt_ans),
+        },
+        {
+            "role": "assistant",
+            "content": prompt_ans,
+        },
+    ]
+
+
+    return general_process_data(
+        chat_template_prompt=chat_template[:-1],
+        format=format,
+        tokenizer=tokenizer,
+        answer=prompt_ans,
     )
 
 
@@ -498,6 +639,7 @@ def processrubrics_data(
         tokenizer=tokenizer,
         answer="no answer",  # answer,
     )
+    
 
 
 
@@ -606,6 +748,26 @@ SUPPORTED_DATASETS = {
         processrubrics_data,
         "JunkaiZ/Rubrics",
     ),
+     "graf/Dolci-Instruct-SFT-Science": (
+        {},
+        processdolci_data,
+        "graf/Dolci-Instruct-SFT-Science",
+    ),
+     "hicai-zju/SciKnowEval": (
+         {},
+         processsciknow_data,
+         "hicai-zju/SciKnowEval",
+     ),
+     "FreedomIntelligence/medical-o1-reasoning-SFT": (
+         {"name":"en"},
+         processo1medical_data,
+         "FreedomIntelligence/medical-o1-reasoning-SFT",
+     ),
+     "openlifescienceai/medmcqa": (
+         {},
+         processmedmcqa_data,
+         "openlifescienceai/medmcqa",
+     ),
      #processdeepscaler_data
     # eval
     # "tatsu-lab/alpaca_eval", "alpaca_eval")["eval"]
@@ -653,8 +815,7 @@ def get_data_iterable(
 
         # limit the size of the dataset
 
-        if n is not None:
-            ds = ds.select(list(range(n)))
+        
 
         ds = ds.map(
             partial(
@@ -667,6 +828,9 @@ def get_data_iterable(
             load_from_cache_file=False,
             # desc=None,  # Disable tqdm progress bar
         )
+        
+        if n is not None:
+            ds = ds.select(list(range(n)))
 
     else:
         ds = load_dataset(dataset_path, split=split, trust_remote_code=True, **kwargs)

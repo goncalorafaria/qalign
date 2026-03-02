@@ -72,6 +72,8 @@ def get_strategy(
         pick = BonResamplePick(
             key=key, gaps=gaps, exp_rate=exp_rate, multiprocessing=p, **kwargs
         )
+    elif strategy == "correlation":
+        pick = CorrelationPick(key=key, multiprocessing=p, **kwargs)
     else:
         raise ValueError("Invalid strategy")
 
@@ -505,6 +507,8 @@ class VotingPick(Evalutor):
         else:
             x_axis = [exp.meta["steps"]]
 
+        if self.n is None:
+            self.n = exp.meta["n"]
         # num_chains = exp.meta.get("num_chains", 1)
         # max_num_chains = self.max_num_chains if self.max_num_chains else num_chains
 
@@ -713,6 +717,9 @@ class MeanPick(Evalutor):
         else:
             x_axis = [exp.meta["steps"]]
 
+        
+        if self.n is None:
+            self.n = exp.meta["n"]
         # num_chains = exp.meta.get("num_chains", 1)
         # max_num_chains = self.max_num_chains if self.max_num_chains else num_chains
 
@@ -770,7 +777,6 @@ class MeanPick(Evalutor):
             }
         ]
         return results        
-
 
 
 class BonPick(Evalutor):
@@ -837,6 +843,50 @@ class BonPick(Evalutor):
             x_results.append(float(np.mean(list((results)))))
 
         return [{"axis": x_axis, "scores": x_results}]
+
+
+class CorrelationPick(Evalutor):
+
+    def __init__(
+        self,
+        key,
+        multiprocessing=None,
+        extract="lastnumber",
+        n=None,
+        **kwargs,
+    ):
+        super().__init__(key + "-correlation" if n is None else key + "-correlation-" + str(n))
+        self.reward_key = key
+        self.pmap = multiprocessing.map if multiprocessing else map
+        self.n = n
+        self.extract_key = extract
+
+    def eval(self, exp: Exp):
+
+        assert exp.has_eval(
+            self.reward_key
+        ), f"Experiment does not have {self.reward_key} eval"
+
+
+        if self.n is not None:
+            n = self.n
+        else:
+            n = exp.meta["n"]
+        #    instances = instances[: self.n]
+
+       
+            # spawn pool of workers
+
+        results = float(np.nanmean([ np.corrcoef(r["scores"],gt["scores"])[0,1] for r,gt in zip(
+                    exp.get_eval(self.reward_key)[:n],
+                    exp.get_eval(self.extract_key)[:n],
+                )
+            
+        ]))
+        # np.corrcoef
+
+
+        return [{"axis": [n], "score": results}]
 
 
 class BonResamplePick(Evalutor):

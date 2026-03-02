@@ -98,8 +98,8 @@ def main(
 
             except Exception as e:
                 print(experiment.name)
-                print(e)
-                
+                #print(e)
+                #raise e
                 return experiment
 
         setup = setup.map(func)

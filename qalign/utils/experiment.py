@@ -154,7 +154,7 @@ def get_batched_data(
     logger.info("--"*20)
     
     data_iterable = get_data_iterable(
-        model_path=model.model_path,
+        model_path=model.tokenizer_path,
         dataset_path=dataset_path,
         split=split,
         n=start_index + n,
@@ -348,6 +348,7 @@ def run_experiment(
             max_prompt_length=experiment.meta["max_prompt_length"],
             max_new_tokens=experiment.meta["max_new_tokens"],
             max_concurrent_requests=max_concurrent_requests,
+            tokenizer_path=experiment.meta.get("tokenizer_path", None),
         )
 
     completed = len(experiment.instances())
